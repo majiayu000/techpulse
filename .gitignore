@@ -1,0 +1,22 @@
+# Go
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Build artifacts
+orchestrator
+
+# Logs
+logs/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
