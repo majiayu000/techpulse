@@ -8,14 +8,14 @@
 ┌────────────────────────────────────────────────────────────┐
 │                    Orchestrator                             │
 │              (轻量级调度器，永远不会崩溃)                     │
-│    • 健康检查   • 成本监控   • 崩溃恢复   • 智能终止         │
+│    • 健康检查   • 成本监控   • 智能终止                      │
 ├────────────────────────────────────────────────────────────┤
 │                    Memory Layer                             │
 │              (Markdown 文件，跨会话共享)                      │
 │    TASKS.md → CONTEXT.md → DONE.md                          │
 ├────────────────────────────────────────────────────────────┤
-│                    Worker (Docker)                          │
-│              (隔离执行，单次任务后退出)                       │
+│                    Worker (Claude CLI)                      │
+│              (单次任务后退出)                                │
 │    Claude Code + --dangerously-skip-permissions             │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -29,10 +29,21 @@
 claude
 ```
 
-### 2. 编辑任务
+### 2. 准备项目目录
+
+项目目录需要包含 `memory/`、`workspace/`、`logs/`，Orchestrator 会自动创建：
+
+```
+project/
+├── memory/
+├── workspace/
+└── logs/
+```
+
+### 3. 编辑任务
 
 ```bash
-vim memory/TASKS.md
+vim project/memory/TASKS.md
 ```
 
 添加你的任务：
@@ -45,66 +56,62 @@ vim memory/TASKS.md
 - [ ] 重构 UserService 类
 ```
 
-### 3. 编辑上下文
+### 4. 编辑上下文
 
 ```bash
-vim memory/CONTEXT.md
+vim project/memory/CONTEXT.md
 ```
 
 描述你的项目，帮助 Claude 理解背景。
 
-### 4. 启动
+### 5. 启动
 
 ```bash
-chmod +x *.sh
-./start.sh
+chmod +x run.sh
+./run.sh 100 50 8 /path/to/project
 ```
 
 ## 命令
 
 ```bash
-./start.sh                    # 启动（按 Ctrl+C 停止）
-./start.sh --max-cost 5       # 限制成本 $5
-./start.sh --max-iterations 10 # 限制 10 次迭代
-./start.sh --no-docker        # 不使用 Docker（调试用）
+./run.sh                    # 默认: 100 次, $50, 8 小时, 项目目录为当前目录
+./run.sh 10 5 2 /path/to/project
 
-./stop.sh                     # 停止运行
-./status.sh                   # 查看状态
+# 也可直接运行二进制
+./orchestrator --dir /path/to/project --max-iterations 10 --max-cost 5 --max-duration 2
 ```
 
 ## 配置
 
-编辑 `config.yaml`：
+在项目目录放置 `config.yaml`（可选）：
 
 ```yaml
 # 安全限制
-max_iterations: 100      # 最大迭代次数
-max_cost_usd: 10.0       # 最大成本 (美元)
-max_duration_hours: 4.0  # 最大运行时长
+max_iterations: 100         # 最大迭代次数
+max_cost_usd: 50.0          # 最大成本 (美元)
+max_duration: 8h            # 最大运行时长 (Go duration)
 consecutive_no_progress: 3  # 连续无进展后停止
+stop_when_empty: true       # 任务为空时停止
 
 # 执行配置
-use_docker: true         # 是否使用 Docker 隔离
-cooldown_seconds: 10     # 迭代间隔
+cooldown_duration: 10s       # 迭代间隔
+worker_timeout: 30m          # 单次 worker 超时
+
+# 进展检测
+use_git_detection: true      # 基于 workspace 的 Git 变化检测
 ```
 
 ## 文件结构
 
 ```
 autonomous-runner/
-├── orchestrator.py      # 主控制器
-├── config.yaml          # 配置文件
-├── start.sh             # 启动脚本
-├── stop.sh              # 停止脚本
-├── status.sh            # 状态脚本
-├── worker/
-│   └── Dockerfile       # Worker 镜像
-├── memory/              # 外部记忆（Claude 读写）
-│   ├── TASKS.md         # 任务队列
-│   ├── CONTEXT.md       # 项目上下文
-│   └── DONE.md          # 完成历史
-├── workspace/           # 工作目录（代码在这里）
-└── logs/                # 运行日志
+├── cmd/orchestrator/    # 主入口
+├── internal/            # 核心逻辑
+├── run.sh               # 启动脚本
+└── (project dir)        # 运行时项目目录
+    ├── memory/          # 外部记忆（Claude 读写）
+    ├── workspace/       # 工作目录（代码在这里）
+    └── logs/            # 运行日志
 ```
 
 ## 工作原理
@@ -114,7 +121,7 @@ autonomous-runner/
 | 设计决策 | 解决的问题 |
 |---------|-----------|
 | Worker 短命 | Context window 永不耗尽 |
-| Docker 隔离 | 安全 + 崩溃不影响主系统 |
+| 进程短命 | Context window 永不耗尽 |
 | Markdown 记忆 | 人可读、可编辑、可版本控制 |
 | 多重终止条件 | 防止无限循环和成本失控 |
 | 无进展检测 | 防止重复劳动 |
@@ -126,7 +133,7 @@ Orchestrator 启动
      ↓
 ┌→ 检查是否继续 (成本/时间/迭代/任务)
 │    ↓ (继续)
-│  启动 Docker Worker
+│  启动 Worker (Claude CLI)
 │    ↓
 │  Worker 读取 TASKS.md + CONTEXT.md
 │    ↓
@@ -151,10 +158,10 @@ Orchestrator 启动
 
 ```bash
 # 方式1: 克隆到 workspace
-git clone https://github.com/your/repo workspace
+git clone https://github.com/your/repo /path/to/project/workspace
 
 # 方式2: 软链接已有项目
-ln -s /path/to/your/project workspace
+ln -s /path/to/your/project /path/to/project/workspace
 ```
 
 ### 后台运行
@@ -162,11 +169,11 @@ ln -s /path/to/your/project workspace
 ```bash
 # 使用 tmux
 tmux new -s claude
-./start.sh
+./run.sh 100 50 8 /path/to/project
 # Ctrl+B, D 分离
 
 # 使用 nohup
-nohup ./start.sh > /dev/null 2>&1 &
+nohup ./run.sh 100 50 8 /path/to/project > /dev/null 2>&1 &
 ```
 
 ### 监控日志
@@ -176,16 +183,16 @@ nohup ./start.sh > /dev/null 2>&1 &
 tail -f logs/orchestrator_*.log
 
 # 查看状态
-./status.sh
+tail -f /path/to/project/logs/orchestrator_*.log
 ```
 
 ## 安全说明
 
-1. **Docker 隔离**：Worker 在容器中运行，无法访问宿主机
-2. **成本限制**：`max_cost_usd` 硬限制 API 支出
-3. **时间限制**：`max_duration_hours` 防止无限运行
-4. **无进展检测**：连续无变化自动停止
-5. **优雅退出**：Ctrl+C 会完成当前任务后停止
+1. **成本限制**：`max_cost_usd` 硬限制 API 支出
+2. **时间限制**：`max_duration` 防止无限运行
+3. **无进展检测**：连续无变化自动停止
+4. **优雅退出**：Ctrl+C 会完成当前任务后停止
+5. **权限提示**：使用 `--dangerously-skip-permissions`，建议在受控目录运行
 
 ## 常见问题
 
@@ -208,9 +215,9 @@ tail -100 logs/orchestrator_*.log
 
 目前通过 Claude Code 的 JSON 输出解析成本。如果解析失败，建议监控 Anthropic 控制台。
 
-### Q: 不使用 Docker 安全吗？
+### Q: 可以用 Git 检测进展吗？
 
-不建议。`--dangerously-skip-permissions` 允许 Claude 执行任意命令，Docker 隔离是必要的安全措施。
+可以，默认开启 `use_git_detection: true`，会检测 `workspace/` 内的变更。
 
 ## License
 
