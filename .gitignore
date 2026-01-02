@@ -1,22 +1,25 @@
-# Go
-/bin/
+# Binaries
+/techpulse
+/orchestrator
 *.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
 
-# Build artifacts
-orchestrator
-
-# Logs
+# Output
+.techpulse/
 logs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
 
 # OS
 .DS_Store
+Thumbs.db
 
-# IDE
-.vscode/
-.idea/
+# Test
+coverage.out
+coverage.html
+*.out
+
+# Memory (runtime)
+memory/

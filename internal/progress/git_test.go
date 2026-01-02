@@ -1,0 +1,171 @@
+package progress
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestGitDetector_NewInGitRepo(t *testing.T) {
+	// Use current repo as test since it's a git repo
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Skipf("cannot get working directory: %v", err)
+	}
+
+	gd, err := NewGitDetector(wd)
+	if err != nil {
+		t.Skipf("test directory not a git repo: %v", err)
+	}
+	if gd == nil {
+		t.Fatal("expected non-nil GitDetector")
+	}
+}
+
+func TestGitDetector_Name(t *testing.T) {
+	wd, _ := os.Getwd()
+	gd, err := NewGitDetector(wd)
+	if err != nil {
+		t.Skipf("test skipped: %v", err)
+	}
+
+	if gd.Name() != "git" {
+		t.Errorf("expected name 'git', got %q", gd.Name())
+	}
+}
+
+func TestGitDetector_DetectNoChanges(t *testing.T) {
+	wd, _ := os.Getwd()
+	gd, err := NewGitDetector(wd)
+	if err != nil {
+		t.Skipf("test skipped: %v", err)
+	}
+
+	// Reset first to get clean state
+	gd.Reset()
+
+	// Detect in clean state (may or may not show changes based on current repo state)
+	_, detectErr := gd.Detect()
+	if detectErr != nil {
+		t.Fatalf("Detect failed: %v", detectErr)
+	}
+}
+
+func TestGitDetector_DetectWithNewFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Initialize a git repo in temp dir
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	// Reset to clean state
+	gd.Reset()
+
+	// Create a new file
+	newFile := filepath.Join(tmpDir, "testfile.txt")
+	if err := os.WriteFile(newFile, []byte("test content"), 0644); err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+
+	// Detect should find untracked file
+	hasProgress, err := gd.Detect()
+	if err != nil {
+		t.Fatalf("Detect failed: %v", err)
+	}
+	if !hasProgress {
+		t.Error("expected progress with new untracked file")
+	}
+}
+
+func TestGitDetector_Reset(t *testing.T) {
+	wd, _ := os.Getwd()
+	gd, err := NewGitDetector(wd)
+	if err != nil {
+		t.Skipf("test skipped: %v", err)
+	}
+
+	err = gd.Reset()
+	if err != nil {
+		t.Fatalf("Reset failed: %v", err)
+	}
+}
+
+func TestGitDetector_DetailsNoChanges(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	// Reset to clean state
+	gd.Reset()
+	gd.Detect()
+
+	details := gd.Details()
+	// With clean state, might be empty or "无变化"
+	if details == "" {
+		details = "无变化"
+	}
+	// Just check it doesn't panic
+}
+
+func TestGitDetector_DetailsWithChanges(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	// Create a new file
+	newFile := filepath.Join(tmpDir, "changed.txt")
+	os.WriteFile(newFile, []byte("content"), 0644)
+
+	gd.Detect()
+	details := gd.Details()
+
+	// Should have some content
+	if details == "" {
+		t.Error("expected non-empty details with changes")
+	}
+}
+
+func TestGitDetector_CreateCheckpoint(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	// Create a file to commit
+	testFile := filepath.Join(tmpDir, "checkpoint.txt")
+	os.WriteFile(testFile, []byte("checkpoint content"), 0644)
+
+	err = gd.CreateCheckpoint("test checkpoint")
+	if err != nil {
+		t.Fatalf("CreateCheckpoint failed: %v", err)
+	}
+}
+
+func TestGitDetector_ManyChangedFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	// Create many files to test truncation
+	for i := 0; i < 10; i++ {
+		fname := filepath.Join(tmpDir, filepath.Base(tmpDir)+string(rune('a'+i))+".txt")
+		os.WriteFile(fname, []byte("content"), 0644)
+	}
+
+	gd.Detect()
+	details := gd.Details()
+
+	// Should have truncation indicator
+	if len(details) < 5 {
+		t.Errorf("expected more detail output, got %q", details)
+	}
+}

@@ -1,0 +1,209 @@
+package httpclient
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestNew(t *testing.T) {
+	c := New()
+
+	if c.httpClient == nil {
+		t.Error("expected httpClient to be set")
+	}
+	if c.userAgent != "TechPulse/1.0" {
+		t.Errorf("expected userAgent=TechPulse/1.0, got %s", c.userAgent)
+	}
+	if c.retryConfig.MaxRetries != 3 {
+		t.Errorf("expected MaxRetries=3, got %d", c.retryConfig.MaxRetries)
+	}
+}
+
+func TestNewWithOptions(t *testing.T) {
+	c := New(
+		WithTimeout(5*time.Second),
+		WithUserAgent("TestAgent/1.0"),
+		WithRetryConfig(NoRetryConfig()),
+	)
+
+	if c.httpClient.Timeout != 5*time.Second {
+		t.Errorf("expected timeout=5s, got %v", c.httpClient.Timeout)
+	}
+	if c.userAgent != "TestAgent/1.0" {
+		t.Errorf("expected userAgent=TestAgent/1.0, got %s", c.userAgent)
+	}
+	if c.retryConfig.MaxRetries != 0 {
+		t.Errorf("expected MaxRetries=0, got %d", c.retryConfig.MaxRetries)
+	}
+}
+
+func TestGet(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	c := New()
+	resp, err := c.Get(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestGetBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("hello world"))
+	}))
+	defer server.Close()
+
+	c := New()
+	body, err := c.GetBody(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if string(body) != "hello world" {
+		t.Errorf("expected 'hello world', got %s", string(body))
+	}
+}
+
+func TestRetryOnServerError(t *testing.T) {
+	var attempts int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&attempts, 1)
+		if count < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("success"))
+	}))
+	defer server.Close()
+
+	c := New(WithRetryConfig(RetryConfig{
+		MaxRetries:        3,
+		InitialDelay:      10 * time.Millisecond,
+		MaxDelay:          50 * time.Millisecond,
+		Multiplier:        2.0,
+		Jitter:            0,
+		RetryableStatuses: []int{http.StatusServiceUnavailable},
+	}))
+
+	body, err := c.GetBody(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if atomic.LoadInt32(&attempts) != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+	if string(body) != "success" {
+		t.Errorf("expected 'success', got %s", string(body))
+	}
+}
+
+func TestNoRetryOnNonRetryableStatus(t *testing.T) {
+	var attempts int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := New(WithRetryConfig(RetryConfig{
+		MaxRetries:        3,
+		InitialDelay:      10 * time.Millisecond,
+		MaxDelay:          50 * time.Millisecond,
+		Multiplier:        2.0,
+		RetryableStatuses: []int{http.StatusServiceUnavailable},
+	}))
+
+	_, err := c.GetBody(context.Background(), server.URL)
+	if err == nil {
+		t.Fatal("expected error for 404")
+	}
+
+	if atomic.LoadInt32(&attempts) != 1 {
+		t.Errorf("expected 1 attempt (no retry), got %d", attempts)
+	}
+}
+
+func TestMaxRetriesExceeded(t *testing.T) {
+	var attempts int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	c := New(WithRetryConfig(RetryConfig{
+		MaxRetries:        2,
+		InitialDelay:      10 * time.Millisecond,
+		MaxDelay:          50 * time.Millisecond,
+		Multiplier:        2.0,
+		RetryableStatuses: []int{http.StatusServiceUnavailable},
+	}))
+
+	_, err := c.GetBody(context.Background(), server.URL)
+	if err == nil {
+		t.Fatal("expected error after max retries")
+	}
+
+	// Initial attempt + 2 retries = 3 total
+	if atomic.LoadInt32(&attempts) != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	c := New()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := c.Get(ctx, server.URL)
+	if err == nil {
+		t.Fatal("expected error due to context cancellation")
+	}
+}
+
+func TestUserAgentHeader(t *testing.T) {
+	var receivedUA string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedUA = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	c := New(WithUserAgent("CustomAgent/2.0"))
+	resp, err := c.Get(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	resp.Body.Close()
+
+	if receivedUA != "CustomAgent/2.0" {
+		t.Errorf("expected User-Agent 'CustomAgent/2.0', got '%s'", receivedUA)
+	}
+}
