@@ -1,223 +1,277 @@
-# Claude Code Autonomous Runner
+# TechPulse
 
-让 Claude Code 24小时自主运行的最稳定方案。
+A CLI tool that automatically collects and curates AI/tech news from multiple sources.
 
-## 核心设计
+## Features
 
-```
-┌────────────────────────────────────────────────────────────┐
-│                    Orchestrator                             │
-│              (轻量级调度器，永远不会崩溃)                     │
-│    • 健康检查   • 成本监控   • 智能终止                      │
-├────────────────────────────────────────────────────────────┤
-│                    Memory Layer                             │
-│              (Markdown 文件，跨会话共享)                      │
-│    TASKS.md → CONTEXT.md → DONE.md                          │
-├────────────────────────────────────────────────────────────┤
-│                    Worker (Claude CLI)                      │
-│              (单次任务后退出)                                │
-│    Claude Code + --dangerously-skip-permissions             │
-└────────────────────────────────────────────────────────────┘
-```
+- **7 Data Sources**: Hacker News (Top/Ask/Show), RSS feeds, GitHub Trending, Reddit, Lobsters
+- **Smart Filtering**: Keyword matching with include/exclude rules
+- **Deduplication**: Removes duplicate articles across sources
+- **Importance Scoring**: Ranks articles by score, comments, and keywords
+- **Source Weighting**: Prioritizes high-quality sources
+- **Content Summaries**: Extract article content summaries (`--summary`)
+- **Published Dates**: Shows article publication time in reports
+- **Rate Limiting**: Per-domain throttling to prevent API bans
+- **Daemon Mode**: Continuous collection at configurable intervals, with hot-reload support
+- **Progress Bar**: Visual feedback during collection (`--progress`)
+- **Markdown Reports**: Clean, readable daily digests
 
-## 快速开始
-
-### 1. 确保已登录 Claude Code
+## Quick Start
 
 ```bash
-# 如果还没登录，先运行一次
-claude
+# Build the tool
+go build -o techpulse ./cmd/techpulse
+
+# Run once (collects from all sources)
+./techpulse
+
+# View the report
+cat .techpulse/DIGEST.md
 ```
 
-### 2. 准备项目目录
+## Installation
 
-项目目录需要包含 `memory/`、`workspace/`、`logs/`，Orchestrator 会自动创建：
-
-```
-project/
-├── memory/
-├── workspace/
-└── logs/
-```
-
-### 3. 编辑任务
+Requires Go 1.22+.
 
 ```bash
-vim project/memory/TASKS.md
+git clone https://github.com/majiayu000/techpulse.git
+cd techpulse
+go build -o techpulse ./cmd/techpulse
 ```
 
-添加你的任务：
-```markdown
-## 高优先级
-- [ ] 为 src/auth.ts 添加单元测试
-- [ ] 修复登录页面的类型错误
+## Usage
 
-## 中优先级
-- [ ] 重构 UserService 类
-```
-
-### 4. 编辑上下文
+### Basic Commands
 
 ```bash
-vim project/memory/CONTEXT.md
+# Collect from all sources
+./techpulse
+
+# List available sources
+./techpulse --list-sources
+
+# Collect from specific sources
+./techpulse --sources hackernews_top,github_trending_daily
+
+# Limit articles per source
+./techpulse --limit 20
+
+# Custom output directory
+./techpulse --output ./my-reports
 ```
 
-描述你的项目，帮助 Claude 理解背景。
+### Daemon Mode
 
-### 5. 启动
+Run continuously with automatic collection:
 
 ```bash
-chmod +x run.sh
-./run.sh 100 50 8 /path/to/project
+# Collect every hour
+./techpulse --daemon --interval 1h
+
+# Collect every 6 hours
+./techpulse --daemon --interval 6h
+
+# Default: collect every 24 hours
+./techpulse --daemon
 ```
 
-## 命令
+Press `Ctrl+C` to stop gracefully.
+
+**Hot Reload**: In daemon mode, configuration changes are automatically applied on the next collection cycle. Simply edit your `techpulse.yaml` file while the daemon is running.
+
+### Configuration File
+
+Generate an example config:
 
 ```bash
-./run.sh                    # 默认: 100 次, $50, 8 小时, 项目目录为当前目录
-./run.sh 10 5 2 /path/to/project
-
-# 也可直接运行二进制
-./orchestrator --dir /path/to/project --max-iterations 10 --max-cost 5 --max-duration 2
+./techpulse --gen-config
 ```
 
-## 配置
-
-在项目目录放置 `config.yaml`（可选）：
+This creates `techpulse.yaml`:
 
 ```yaml
-# 安全限制
-max_iterations: 100         # 最大迭代次数
-max_cost_usd: 50.0          # 最大成本 (美元)
-max_duration: 8h            # 最大运行时长 (Go duration)
-consecutive_no_progress: 3  # 连续无进展后停止
-stop_when_empty: true       # 任务为空时停止
+# Maximum articles per source
+limit: 30
 
-# 执行配置
-cooldown_duration: 10s       # 迭代间隔
-worker_timeout: 30m          # 单次 worker 超时
+# Output directory
+output: .techpulse
 
-# 进展检测
-use_git_detection: true      # 基于 workspace 的 Git 变化检测
+# Request timeout in seconds
+timeout: 60
+
+# Sources to use (optional, uses all if empty)
+# sources:
+#   - hackernews_top
+#   - github_trending_daily
+
+# Keyword filters
+keywords:
+  include:
+    - AI
+    - LLM
+    - GPT
+    - Claude
+    - machine learning
+    - Rust
+    - Go
+  exclude:
+    - crypto
+    - NFT
+    - blockchain
+
+# Custom RSS feeds
+# rss_feeds:
+#   - name: My Feed
+#     url: https://example.com/feed.xml
+
+# Enable content summary extraction (default: false)
+enable_summary: false
 ```
 
-## 文件结构
+Config file locations (in order):
+1. `techpulse.yaml` (current directory)
+2. `.techpulse/config.yaml`
+3. `~/.config/techpulse/config.yaml`
+
+CLI flags override config file settings.
+
+## Data Sources
+
+| Source | ID | Description |
+|--------|------|-------------|
+| Hacker News Top | `hackernews_top` | Top stories from HN |
+| Hacker News Ask | `hackernews_ask` | Ask HN discussions |
+| Hacker News Show | `hackernews_show` | Show HN projects |
+| RSS | `rss` | TechCrunch, Ars Technica, The Verge, Wired, MIT Technology Review |
+| GitHub Trending | `github_trending_daily` | Daily trending repositories |
+| Reddit | `reddit` | r/MachineLearning, r/programming, etc. |
+| Lobsters | `lobsters_hottest` | Hottest from lobste.rs |
+
+## Output
+
+Reports are saved to `.techpulse/` by default:
 
 ```
-autonomous-runner/
-├── cmd/orchestrator/    # 主入口
-├── internal/            # 核心逻辑
-├── run.sh               # 启动脚本
-└── (project dir)        # 运行时项目目录
-    ├── memory/          # 外部记忆（Claude 读写）
-    ├── workspace/       # 工作目录（代码在这里）
-    └── logs/            # 运行日志
+.techpulse/
+  DIGEST.md           # Latest report
+  archive/
+    2026-01-01.md     # Archived daily reports
 ```
 
-## 工作原理
+### Report Format
 
-### 为什么这样设计？
+```markdown
+# Daily Tech Digest - 2026-01-01
 
-| 设计决策 | 解决的问题 |
-|---------|-----------|
-| Worker 短命 | Context window 永不耗尽 |
-| 进程短命 | Context window 永不耗尽 |
-| Markdown 记忆 | 人可读、可编辑、可版本控制 |
-| 多重终止条件 | 防止无限循环和成本失控 |
-| 无进展检测 | 防止重复劳动 |
+Collected **64** articles | Avg Importance: **6.5**/10
 
-### 执行流程
+## Top Stories
+
+### 1. [Article Title](https://example.com)
+- Source: hackernews_top | Score: 234 | Importance: 8.5/10 | Published: 2026-01-01 10:30
+- Keywords: [AI LLM]
+
+> Brief summary of the article content...
 
 ```
-Orchestrator 启动
-     ↓
-┌→ 检查是否继续 (成本/时间/迭代/任务)
-│    ↓ (继续)
-│  启动 Worker (Claude CLI)
-│    ↓
-│  Worker 读取 TASKS.md + CONTEXT.md
-│    ↓
-│  Worker 执行任务
-│    ↓
-│  Worker 更新 .md 文件
-│    ↓
-│  Worker 退出
-│    ↓
-│  Orchestrator 检测进展
-│    ↓
-│  冷却等待
-│    ↓
-└──────────────────┘
-     ↓ (停止)
-打印摘要，退出
+
+## CLI Reference
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--limit` | 30 | Max articles per source |
+| `--sources` | all | Comma-separated source IDs |
+| `--output` | .techpulse | Output directory |
+| `--timeout` | 60 | Request timeout (seconds) |
+| `--config` | auto | Path to config file |
+| `--gen-config` | - | Generate example config |
+| `--list-sources` | - | List available sources |
+| `--daemon` | false | Run continuously |
+| `--interval` | 24h | Collection interval (daemon) |
+| `--quiet`, `-q` | false | Suppress all output except errors |
+| `--progress` | false | Show collection progress bar |
+| `--summary` | false | Extract content summaries from articles |
+| `--validate` | - | Validate config file and exit |
+| `--version`, `-v` | - | Show version information |
+
+## Development
+
+### Project Structure
+
+```
+cmd/techpulse/          # CLI entry point
+internal/
+  collector/            # Data source collectors
+    hackernews/         # Hacker News API
+    rss/                # RSS feed parser
+    github/             # GitHub Trending scraper
+    reddit/             # Reddit API
+    lobsters/           # Lobsters API
+  filter/               # Content filtering
+  summarizer/           # Scoring and ranking
+  extractor/            # Content summary extraction
+  storage/              # Markdown output
+  httpclient/           # HTTP with retries & rate limiting
+  logger/               # Structured logging
+  progress/             # Terminal progress bar
+  techpulse/            # Main orchestrator
 ```
 
-## 高级用法
-
-### 把代码放入 workspace
+### Running Tests
 
 ```bash
-# 方式1: 克隆到 workspace
-git clone https://github.com/your/repo /path/to/project/workspace
+# Run all tests
+go test ./...
 
-# 方式2: 软链接已有项目
-ln -s /path/to/your/project /path/to/project/workspace
+# Using Makefile
+make test              # Run all tests
+make test-cover        # Run with coverage summary
+make test-cover-report # Generate coverage.out file
+make test-cover-html   # Generate HTML report and open in browser
 ```
 
-### 后台运行
+### Test Coverage
+
+Current coverage by module:
+
+| Module | Coverage |
+|--------|----------|
+| filter | 100.0% |
+| extractor | 96.6% |
+| summarizer | 96.4% |
+| rss | 95.7% |
+| techpulse | 93.6% |
+| hackernews | 92.9% |
+| reddit | 90.9% |
+| progress | 90.2% |
+| storage | 88.9% |
+| github | 88.1% |
+| lobsters | 87.0% |
+| httpclient | 86.1% |
+| logger | 85.7% |
+| **Total** | **82.8%** |
+
+### Make Commands
 
 ```bash
-# 使用 tmux
-tmux new -s claude
-./run.sh 100 50 8 /path/to/project
-# Ctrl+B, D 分离
-
-# 使用 nohup
-nohup ./run.sh 100 50 8 /path/to/project > /dev/null 2>&1 &
+make build            # Build the techpulse binary (dev)
+make build-release    # Build with version info embedded
+make test             # Run all tests
+make test-cover       # Run tests with coverage summary
+make test-cover-html  # Generate HTML coverage report
+make fmt              # Format code
+make vet              # Run go vet
+make run              # Build and run
+make run-daemon       # Build and run in daemon mode
+make clean            # Remove build artifacts
+make help             # Show all commands
 ```
 
-### 监控日志
+### Code Standards
 
-```bash
-# 实时查看日志
-tail -f logs/orchestrator_*.log
-
-# 查看状态
-tail -f /path/to/project/logs/orchestrator_*.log
-```
-
-## 安全说明
-
-1. **成本限制**：`max_cost_usd` 硬限制 API 支出
-2. **时间限制**：`max_duration` 防止无限运行
-3. **无进展检测**：连续无变化自动停止
-4. **优雅退出**：Ctrl+C 会完成当前任务后停止
-5. **权限提示**：使用 `--dangerously-skip-permissions`，建议在受控目录运行
-
-## 常见问题
-
-### Q: 如何查看 Claude 做了什么？
-
-```bash
-# 查看完成历史
-cat memory/DONE.md
-
-# 查看日志
-tail -100 logs/orchestrator_*.log
-```
-
-### Q: 如何干预正在运行的任务？
-
-1. 直接编辑 `memory/TASKS.md` 添加紧急任务
-2. 下一次迭代 Claude 会看到新任务
-
-### Q: 成本如何计算？
-
-目前通过 Claude Code 的 JSON 输出解析成本。如果解析失败，建议监控 Anthropic 控制台。
-
-### Q: 可以用 Git 检测进展吗？
-
-可以，默认开启 `use_git_detection: true`，会检测 `workspace/` 内的变更。
+- Each `.go` file is under 200 lines
+- Clean module boundaries with interfaces
+- Comprehensive test coverage (170+ tests, 82%+ coverage)
 
 ## License
 

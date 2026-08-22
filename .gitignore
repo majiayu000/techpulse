@@ -1,11 +1,9 @@
 # Binaries
 /techpulse
-/orchestrator
 *.exe
 
 # Output
 .techpulse/
-logs/
 
 # IDE
 .idea/
@@ -21,5 +19,3 @@ coverage.out
 coverage.html
 *.out
 
-# Memory (runtime)
-memory/

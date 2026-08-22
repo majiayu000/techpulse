@@ -270,7 +270,7 @@ import (
     "net/http"
     "time"
 
-    "github.com/anthropic/autonomous-runner/internal/collector"
+    "github.com/majiayu000/techpulse/internal/collector"
 )
 
 const (
@@ -428,7 +428,7 @@ import (
     "regexp"
     "strings"
 
-    "github.com/anthropic/autonomous-runner/internal/collector"
+    "github.com/majiayu000/techpulse/internal/collector"
 )
 
 // FilteredArticle 过滤后的文章，包含匹配信息
@@ -569,7 +569,7 @@ import (
     "context"
     "fmt"
 
-    "github.com/anthropic/autonomous-runner/internal/filter"
+    "github.com/majiayu000/techpulse/internal/filter"
 )
 
 // EnrichedArticle 带有 AI 增强信息的文章
@@ -709,7 +709,7 @@ import (
     "path/filepath"
     "time"
 
-    "github.com/anthropic/autonomous-runner/internal/summarizer"
+    "github.com/majiayu000/techpulse/internal/summarizer"
 )
 
 // Storage 存储接口
@@ -816,8 +816,8 @@ import (
     "strings"
     "time"
 
-    "github.com/anthropic/autonomous-runner/internal/memory"
-    "github.com/anthropic/autonomous-runner/internal/summarizer"
+    "github.com/majiayu000/techpulse/internal/memory"
+    "github.com/majiayu000/techpulse/internal/summarizer"
 )
 
 // MemoryIntegration 与 Memory 模块的集成
@@ -890,6 +890,8 @@ func (m *MemoryIntegration) generateCollectionSummary(articles []summarizer.Enri
 
 ### 4.2 与 Worker 模块集成
 
+> **⚠️ 已过时**:本节描述的 `internal/worker` 模块属于 TechPulse 前身(autonomous-runner)的设计,已从代码库中删除,以下内容仅作历史设计存档。
+
 ```go
 // internal/collector/worker_integration.go
 
@@ -899,7 +901,7 @@ import (
     "context"
     "fmt"
 
-    "github.com/anthropic/autonomous-runner/internal/worker"
+    "github.com/majiayu000/techpulse/internal/worker"
 )
 
 // WorkerTask 定义收集任务供 Worker 执行
@@ -956,7 +958,7 @@ import (
     "encoding/hex"
     "fmt"
 
-    "github.com/anthropic/autonomous-runner/internal/progress"
+    "github.com/majiayu000/techpulse/internal/progress"
 )
 
 // CollectionDetector 检测收集进度的检测器
