@@ -4,25 +4,27 @@ package techpulse
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
-	"github.com/anthropic/autonomous-runner/internal/filter"
-	"github.com/anthropic/autonomous-runner/internal/httpclient"
-	"github.com/anthropic/autonomous-runner/internal/logger"
-	"github.com/anthropic/autonomous-runner/internal/storage"
-	"github.com/anthropic/autonomous-runner/internal/summarizer"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/filter"
+	"github.com/majiayu000/techpulse/internal/httpclient"
+	"github.com/majiayu000/techpulse/internal/logger"
+	"github.com/majiayu000/techpulse/internal/storage"
+	"github.com/majiayu000/techpulse/internal/summarizer"
 )
 
 // Config contains TechPulse configuration options.
 type Config struct {
-	Limit         int              // Maximum articles per source
-	Sources       []string         // Specific sources to use (empty = all)
-	Output        string           // Custom output directory
-	Timeout       int              // Request timeout in seconds
-	Keywords      *KeywordsConfig  // Custom keyword filters
-	RSSFeeds      []RSSFeedConfig  // Custom RSS feeds
-	EnableSummary bool             // Enable content summary extraction
+	Limit         int             // Maximum articles per source
+	Sources       []string        // Specific sources to use (empty = all)
+	Output        string          // Custom output directory
+	Timeout       int             // Request timeout in seconds
+	Keywords      *KeywordsConfig // Custom keyword filters
+	RSSFeeds      []RSSFeedConfig // Custom RSS feeds
+	EnableSummary bool            // Enable content summary extraction
 }
 
 // DefaultConfig returns the default configuration.
@@ -35,14 +37,24 @@ func DefaultConfig() Config {
 	}
 }
 
+// timeoutDuration converts a timeout in seconds to a duration; non-positive
+// values yield 0 (no deadline).
+func timeoutDuration(seconds int) time.Duration {
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 // TechPulse orchestrates the collection, filtering, and storage of tech news.
 type TechPulse struct {
-	config      Config
-	registry    *collector.Registry
-	pipeline    *filter.Pipeline
-	summarizer  summarizer.Summarizer
-	storage     storage.Storage
-	log         logger.Logger
+	config       Config
+	registry     *collector.Registry
+	pipeline     *filter.Pipeline
+	summarizer   summarizer.Summarizer
+	storage      storage.Storage
+	storeCfg     storage.Config // Resolved storage config (digest/archive paths)
+	log          logger.Logger
 	showProgress bool
 }
 
@@ -64,6 +76,7 @@ func NewWithOptions(cfg Config) *TechPulse {
 		pipeline:   buildFilterPipeline(cfg.Keywords),
 		summarizer: buildSummarizer(cfg),
 		storage:    storage.NewMarkdownStorage(storeCfg),
+		storeCfg:   storeCfg,
 		log:        logger.Default(),
 	}
 }
@@ -71,7 +84,11 @@ func NewWithOptions(cfg Config) *TechPulse {
 // buildSummarizer creates the appropriate summarizer based on config.
 func buildSummarizer(cfg Config) summarizer.Summarizer {
 	if cfg.EnableSummary {
-		client := httpclient.New()
+		var opts []httpclient.Option
+		if d := timeoutDuration(cfg.Timeout); d > 0 {
+			opts = append(opts, httpclient.WithTimeout(d))
+		}
+		client := httpclient.New(opts...)
 		return summarizer.NewSummarizingEnricher(client, summarizer.DefaultSummaryConfig())
 	}
 	return summarizer.NewBasicSummarizer()
@@ -117,10 +134,16 @@ func (tp *TechPulse) Run(ctx context.Context) error {
 	tp.log.Info("TechPulse starting...")
 	opts := collector.Options{
 		Limit:   tp.config.Limit,
-		Timeout: time.Duration(tp.config.Timeout) * time.Second,
+		Timeout: timeoutDuration(tp.config.Timeout),
 	}
 	results := tp.collectFromSources(ctx, opts)
 	allArticles := tp.combineResults(results)
+
+	// An interrupted run (e.g. Ctrl+C mid-collection) must never replace the
+	// previous good digest with partial content. Fail loudly instead.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("run interrupted after collecting %d articles; previous output left untouched: %w", len(allArticles), err)
+	}
 	if len(allArticles) == 0 {
 		return fmt.Errorf("no articles collected")
 	}
@@ -129,6 +152,17 @@ func (tp *TechPulse) Run(ctx context.Context) error {
 	tp.log.Info("Filtering...")
 	filtered := tp.pipeline.Process(allArticles)
 	tp.log.Info("After filtering", logger.F("count", len(filtered)))
+
+	// Filtering can legitimately remove everything. Never destroy last-good
+	// output with an empty report: keep the previous digest, say so loudly,
+	// and treat the run as recorded (the notice itself is the run record).
+	if len(filtered) == 0 && tp.hasPreviousDigest() {
+		tp.log.Warn("No articles passed filtering - keeping previous digest",
+			logger.F("collected", len(allArticles)),
+			logger.F("digest", tp.digestPath()),
+		)
+		return nil
+	}
 
 	tp.log.Info("Scoring articles...")
 	enriched, err := tp.summarizer.Enrich(ctx, filtered)
@@ -142,6 +176,12 @@ func (tp *TechPulse) Run(ctx context.Context) error {
 		return fmt.Errorf("generate report: %w", err)
 	}
 
+	// Final guard before touching disk: never start saving into an
+	// interrupted run.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("run interrupted before saving; previous output left untouched: %w", err)
+	}
+
 	tp.log.Info("Saving...")
 	if err := tp.storage.Save(enriched); err != nil {
 		return fmt.Errorf("save articles: %w", err)
@@ -151,4 +191,16 @@ func (tp *TechPulse) Run(ctx context.Context) error {
 	}
 	tp.log.Info("Done!", logger.F("articles", len(enriched)))
 	return nil
+}
+
+// digestPath returns the path of the digest file managed by storage.
+func (tp *TechPulse) digestPath() string {
+	return filepath.Join(tp.storeCfg.BaseDir, tp.storeCfg.DigestFile)
+}
+
+// hasPreviousDigest reports whether a non-empty digest from an earlier run
+// exists and is worth preserving.
+func (tp *TechPulse) hasPreviousDigest() bool {
+	info, err := os.Stat(tp.digestPath())
+	return err == nil && !info.IsDir() && info.Size() > 0
 }

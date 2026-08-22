@@ -2,21 +2,24 @@
 package techpulse
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 // FileConfig represents the YAML configuration file structure.
 type FileConfig struct {
-	Limit         int            `yaml:"limit"`
-	Output        string         `yaml:"output"`
-	Timeout       int            `yaml:"timeout"`
-	Sources       []string       `yaml:"sources"`
-	Keywords      KeywordsConfig `yaml:"keywords"`
+	Limit         int             `yaml:"limit"`
+	Output        string          `yaml:"output"`
+	Timeout       int             `yaml:"timeout"`
+	Sources       []string        `yaml:"sources"`
+	Keywords      KeywordsConfig  `yaml:"keywords"`
 	RSSFeeds      []RSSFeedConfig `yaml:"rss_feeds"`
-	EnableSummary *bool          `yaml:"enable_summary"` // Pointer to distinguish unset from false
+	EnableSummary *bool           `yaml:"enable_summary"` // Pointer to distinguish unset from false
 }
 
 // KeywordsConfig contains keyword filter settings.
@@ -72,8 +75,12 @@ func FindConfigFile() string {
 	return ""
 }
 
-// MergeWithConfig merges file config into runtime config.
-// CLI flags take precedence (non-zero values).
+// MergeWithConfig merges file config into a base config: any value present in
+// the file replaces the corresponding default in base, so callers should pass
+// a DefaultConfig()-derived base. CLI flag precedence is handled by the
+// caller (cmd/techpulse), which layers explicitly-passed flags on top of the
+// merged result — that is the only reliable way to distinguish a flag left at
+// its default from one the user actually passed.
 func MergeWithConfig(base Config, file *FileConfig) Config {
 	if file == nil {
 		return base
@@ -81,7 +88,7 @@ func MergeWithConfig(base Config, file *FileConfig) Config {
 
 	result := base
 
-	// Only override if not set by CLI (base has default or zero value)
+	// File values replace defaults in base wherever the file specifies one.
 	if file.Limit > 0 && base.Limit == DefaultConfig().Limit {
 		result.Limit = file.Limit
 	}
@@ -99,8 +106,9 @@ func MergeWithConfig(base Config, file *FileConfig) Config {
 	result.Keywords = &file.Keywords
 	result.RSSFeeds = file.RSSFeeds
 
-	// EnableSummary: file config only applies if CLI didn't set it
-	// (base.EnableSummary is false by default, so we check if file explicitly sets it)
+	// EnableSummary is a pointer in FileConfig, so an explicit file value
+	// always replaces the default here; explicit CLI --summary values are
+	// layered on top afterwards by the caller.
 	if file.EnableSummary != nil && !base.EnableSummary {
 		result.EnableSummary = *file.EnableSummary
 	}
@@ -108,9 +116,20 @@ func MergeWithConfig(base Config, file *FileConfig) Config {
 	return result
 }
 
+// sortedSourceIDs returns all valid source IDs in sorted order so generated
+// output and help text are deterministic despite ValidSources being a map.
+func sortedSourceIDs() []string {
+	ids := make([]string, 0, len(ValidSources))
+	for id := range ValidSources {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // GenerateExampleConfig creates an example config file.
 func GenerateExampleConfig(path string) error {
-	example := `# TechPulse Configuration
+	example := fmt.Sprintf(`# TechPulse Configuration
 # This is an example configuration file.
 
 # Maximum articles per source (default: 30)
@@ -123,7 +142,7 @@ output: .techpulse
 timeout: 60
 
 # Specify which sources to use (optional, uses all if empty)
-# Available: hackernews_top, rss
+# Available: %s
 # sources:
 #   - hackernews_top
 #   - rss
@@ -161,7 +180,7 @@ keywords:
 # Enable article content summary extraction (default: false)
 # When enabled, extracts first ~200 characters from article content
 enable_summary: false
-`
+`, strings.Join(sortedSourceIDs(), ", "))
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {

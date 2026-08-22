@@ -8,13 +8,13 @@ import (
 // render draws the progress bar. Must be called with mutex held.
 func (b *Bar) render() {
 	percent := 0.0
+	filled := 0
 	if b.total > 0 {
 		percent = float64(b.current) / float64(b.total) * 100
-	}
-
-	filled := int(float64(b.width) * float64(b.current) / float64(b.total))
-	if filled > b.width {
-		filled = b.width
+		filled = int(float64(b.width) * float64(b.current) / float64(b.total))
+		if filled > b.width {
+			filled = b.width
+		}
 	}
 
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", b.width-filled)

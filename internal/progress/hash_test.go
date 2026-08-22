@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anthropic/autonomous-runner/internal/memory"
+	"github.com/majiayu000/techpulse/internal/memory"
 )
 
 func createTestMemory(t *testing.T, dir string) *memory.Manager {
