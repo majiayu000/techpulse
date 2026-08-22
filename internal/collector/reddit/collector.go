@@ -3,12 +3,14 @@ package reddit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/logger"
 )
 
 // Collector collects posts from Reddit.
@@ -61,13 +63,21 @@ func (c *Collector) Validate() error {
 }
 
 // Collect fetches posts from all configured subreddits.
+//
+// A subreddit that fails to fetch is skipped; if at least one subreddit
+// succeeds the collected articles are returned and every failed subreddit is
+// logged as a warning. If every configured subreddit fails, Collect returns
+// an error naming them instead of silently reporting no results.
 func (c *Collector) Collect(ctx context.Context, opts collector.Options) ([]collector.Article, error) {
-	var allArticles []collector.Article
+	var (
+		groups    [][]collector.Article // per-subreddit articles, in config order
+		fetchErrs []error
+	)
 
 	for _, sub := range c.subreddits {
 		posts, err := c.fetchSubreddit(ctx, sub)
 		if err != nil {
-			// Log error but continue with other subreddits
+			fetchErrs = append(fetchErrs, fmt.Errorf("subreddit %s: %w", sub.Name, err))
 			continue
 		}
 
@@ -76,15 +86,53 @@ func (c *Collector) Collect(ctx context.Context, opts collector.Options) ([]coll
 			posts = filterByTime(posts, opts.Since)
 		}
 
-		allArticles = append(allArticles, c.toArticles(posts, sub)...)
+		groups = append(groups, c.toArticles(posts, sub))
 	}
 
-	// Apply limit
-	if opts.Limit > 0 && len(allArticles) > opts.Limit {
-		allArticles = allArticles[:opts.Limit]
+	if len(fetchErrs) > 0 {
+		if len(groups) == 0 {
+			return nil, fmt.Errorf("reddit: all %d subreddits failed: %w",
+				len(fetchErrs), errors.Join(fetchErrs...))
+		}
+		logger.Warn("some reddit subreddits failed to fetch",
+			logger.F("failed", len(fetchErrs)),
+			logger.F("errors", errors.Join(fetchErrs...).Error()))
 	}
 
-	return allArticles, nil
+	articles := interleaveArticles(groups)
+
+	// Apply limit across subreddits (interleaving keeps every subreddit represented)
+	if opts.Limit > 0 && len(articles) > opts.Limit {
+		articles = articles[:opts.Limit]
+	}
+
+	return articles, nil
+}
+
+// interleaveArticles merges per-subreddit article groups round-robin so a
+// later-applied limit trims each subreddit instead of dropping entire ones.
+func interleaveArticles(groups [][]collector.Article) []collector.Article {
+	total := 0
+	maxLen := 0
+	for _, g := range groups {
+		total += len(g)
+		if len(g) > maxLen {
+			maxLen = len(g)
+		}
+	}
+	if total == 0 {
+		return nil
+	}
+
+	out := make([]collector.Article, 0, total)
+	for i := 0; i < maxLen; i++ {
+		for _, g := range groups {
+			if i < len(g) {
+				out = append(out, g[i])
+			}
+		}
+	}
+	return out
 }
 
 // fetchSubreddit fetches posts from a single subreddit.
@@ -166,12 +214,17 @@ func (c *Collector) toArticles(posts []Post, sub Subreddit) []collector.Article 
 	return articles
 }
 
-// truncateContent truncates content to the specified length.
+// truncateContent truncates content to at most maxLen runes, appending an
+// ellipsis. It never splits a multi-byte UTF-8 character.
 func truncateContent(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
 }
 
 // buildTags creates tags from post data.
@@ -189,10 +242,10 @@ func buildTags(p Post, sub Subreddit) []string {
 // buildMetadata creates metadata for a post.
 func buildMetadata(p Post, sub Subreddit) map[string]string {
 	meta := map[string]string{
-		"subreddit":    p.Subreddit,
-		"domain":       p.Domain,
-		"permalink":    fmt.Sprintf("https://www.reddit.com%s", p.Permalink),
-		"category":     sub.Category,
+		"subreddit": p.Subreddit,
+		"domain":    p.Domain,
+		"permalink": fmt.Sprintf("https://www.reddit.com%s", p.Permalink),
+		"category":  sub.Category,
 	}
 	if p.IsSelf {
 		meta["is_self"] = "true"

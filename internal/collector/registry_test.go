@@ -174,9 +174,8 @@ func TestRegistryCollectAll(t *testing.T) {
 			t.Errorf("unexpected error for %s: %v", res.Source, res.Error)
 		}
 		totalArticles += len(res.Articles)
-		if res.Duration <= 0 {
-			t.Errorf("expected positive duration for %s", res.Source)
-		}
+		// NOTE: Duration intentionally not asserted — a mock collector returns
+		// instantly, so time.Since can legitimately measure 0.
 		if res.Timestamp.IsZero() {
 			t.Errorf("expected non-zero timestamp for %s", res.Source)
 		}

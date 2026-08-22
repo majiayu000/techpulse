@@ -1,21 +1,25 @@
 package rss
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
-	"github.com/anthropic/autonomous-runner/internal/httpclient"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/httpclient"
+	"github.com/majiayu000/techpulse/internal/logger"
 )
 
-// Collector collects articles from RSS feeds.
+// Collector collects articles from RSS and Atom feeds.
 type Collector struct {
 	sources    []Source
 	httpClient *httpclient.Client
+	logger     logger.Logger
 }
 
 // New creates a new RSS collector with the specified sources.
@@ -23,7 +27,17 @@ func New(sources []Source) *Collector {
 	return &Collector{
 		sources:    sources,
 		httpClient: httpclient.New(),
+		// logger defaults to nil: per-feed failure warnings go through the
+		// package default logger so --quiet / logger.SetDefault are honored.
+		// Use WithLogger to override.
 	}
+}
+
+// WithLogger overrides the logger used to report per-feed failures.
+// Pass logger.NewNopLogger() to silence failure reporting.
+func (c *Collector) WithLogger(l logger.Logger) *Collector {
+	c.logger = l
+	return c
 }
 
 // NewWithDefaults creates an RSS collector with default sources.
@@ -44,25 +58,79 @@ func (c *Collector) Validate() error {
 	return nil
 }
 
-// Collect fetches articles from all configured RSS feeds.
+// Collect fetches articles from all configured RSS/Atom feeds.
+//
+// A feed that fails to fetch or parse does not abort collection: results
+// from healthy feeds are returned and failures are logged. Only when every
+// configured feed fails does Collect return an error naming each source.
 func (c *Collector) Collect(ctx context.Context, opts collector.Options) ([]collector.Article, error) {
-	var allArticles []collector.Article
+	feeds := make([][]collector.Article, 0, len(c.sources))
+	var failures []string
 
 	for _, source := range c.sources {
 		articles, err := c.fetchFeed(ctx, source, opts)
 		if err != nil {
-			// Log error but continue with other sources
+			failures = append(failures, fmt.Sprintf("%s: %v", source.Name, err))
 			continue
 		}
-		allArticles = append(allArticles, articles...)
+		feeds = append(feeds, articles)
 	}
 
-	// Apply limit
-	if opts.Limit > 0 && len(allArticles) > opts.Limit {
-		allArticles = allArticles[:opts.Limit]
+	if len(feeds) == 0 && len(failures) > 0 {
+		return nil, fmt.Errorf("all %d RSS feeds failed: %s",
+			len(failures), strings.Join(failures, "; "))
 	}
 
-	return allArticles, nil
+	if len(failures) > 0 {
+		fields := []logger.Field{
+			{Key: "collector", Value: c.Name()},
+			{Key: "failed_feeds", Value: strings.Join(failures, "; ")},
+		}
+		if c.logger != nil {
+			c.logger.Warn("some RSS feeds failed; returning partial results", fields...)
+		} else {
+			logger.Warn("some RSS feeds failed; returning partial results", fields...)
+		}
+	}
+
+	return applyLimit(feeds, opts.Limit), nil
+}
+
+// applyLimit merges per-feed articles and applies the requested limit.
+// When truncating, articles are taken round-robin across feeds so that no
+// feed is truncated away entirely.
+func applyLimit(feeds [][]collector.Article, limit int) []collector.Article {
+	total := 0
+	for _, f := range feeds {
+		total += len(f)
+	}
+
+	if limit <= 0 || total <= limit {
+		all := make([]collector.Article, 0, total)
+		for _, f := range feeds {
+			all = append(all, f...)
+		}
+		return all
+	}
+
+	limited := make([]collector.Article, 0, limit)
+	for i := 0; len(limited) < limit; i++ {
+		took := false
+		for _, f := range feeds {
+			if i >= len(f) {
+				continue
+			}
+			limited = append(limited, f[i])
+			took = true
+			if len(limited) == limit {
+				break
+			}
+		}
+		if !took {
+			break
+		}
+	}
+	return limited
 }
 
 func (c *Collector) fetchFeed(ctx context.Context, source Source, opts collector.Options) ([]collector.Article, error) {
@@ -76,17 +144,24 @@ func (c *Collector) fetchFeed(ctx context.Context, source Source, opts collector
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	var feed Feed
-	if err := xml.NewDecoder(resp.Body).Decode(&feed); err != nil {
-		return nil, fmt.Errorf("decode RSS: %w", err)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read feed body: %w", err)
 	}
 
-	articles := make([]collector.Article, 0, len(feed.Channel.Items))
-	for _, item := range feed.Channel.Items {
+	items, err := decodeFeed(data)
+	if err != nil {
+		return nil, err
+	}
+
+	articles := make([]collector.Article, 0, len(items))
+	for _, item := range items {
 		pubTime := c.parseTime(item.PubDate)
 
-		// Apply time filter
-		if !opts.Since.IsZero() && pubTime.Before(opts.Since) {
+		// Apply the Since filter only to known publication dates. Entries
+		// with unparseable dates are kept with a zero timestamp rather than
+		// being silently dropped or stamped with a fabricated time.
+		if !opts.Since.IsZero() && !pubTime.IsZero() && pubTime.Before(opts.Since) {
 			continue
 		}
 
@@ -94,6 +169,54 @@ func (c *Collector) fetchFeed(ctx context.Context, source Source, opts collector
 	}
 
 	return articles, nil
+}
+
+// decodeFeed decodes an RSS or Atom document into the shared Item shape.
+// The format is detected from the document's root element name.
+func decodeFeed(data []byte) ([]Item, error) {
+	root, err := rootElement(data)
+	if err != nil {
+		return nil, fmt.Errorf("inspect feed root element: %w", err)
+	}
+
+	switch root {
+	case "rss":
+		var feed Feed
+		if err := xml.Unmarshal(data, &feed); err != nil {
+			return nil, fmt.Errorf("decode RSS: %w", err)
+		}
+		items := make([]Item, 0, len(feed.Channel.Items))
+		for _, item := range feed.Channel.Items {
+			items = append(items, item)
+		}
+		return items, nil
+	case "feed":
+		var feed AtomFeed
+		if err := xml.Unmarshal(data, &feed); err != nil {
+			return nil, fmt.Errorf("decode Atom: %w", err)
+		}
+		items := make([]Item, 0, len(feed.Entries))
+		for _, entry := range feed.Entries {
+			items = append(items, entry.toItem())
+		}
+		return items, nil
+	default:
+		return nil, fmt.Errorf("unsupported feed format: root element %q", root)
+	}
+}
+
+// rootElement returns the local name of the document's root XML element.
+func rootElement(data []byte) (string, error) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", err
+		}
+		if start, ok := tok.(xml.StartElement); ok {
+			return start.Name.Local, nil
+		}
+	}
 }
 
 func (c *Collector) toArticle(item Item, source Source, pubTime time.Time) collector.Article {
@@ -125,13 +248,17 @@ func (c *Collector) toArticle(item Item, source Source, pubTime time.Time) colle
 	}
 }
 
+// parseTime parses a syndication timestamp using the common feed layouts,
+// including RFC 3339 with optional fractional seconds. It returns the zero
+// time when the value cannot be parsed; substituting the current time would
+// fabricate data and defeat Since filtering.
 func (c *Collector) parseTime(s string) time.Time {
 	formats := []string{
 		time.RFC1123Z,
 		time.RFC1123,
 		time.RFC822Z,
 		time.RFC822,
-		"2006-01-02T15:04:05Z07:00",
+		time.RFC3339Nano,
 		"2006-01-02 15:04:05",
 	}
 	for _, f := range formats {
@@ -139,7 +266,7 @@ func (c *Collector) parseTime(s string) time.Time {
 			return t
 		}
 	}
-	return time.Now()
+	return time.Time{}
 }
 
 func hashString(s string) string {

@@ -2,11 +2,13 @@ package github
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
 )
 
 func TestCollector_Name(t *testing.T) {
@@ -131,6 +133,50 @@ func TestCollector_Collect_Limit(t *testing.T) {
 
 	if len(articles) != 2 {
 		t.Errorf("Collect() got %d articles, want 2 (limit)", len(articles))
+	}
+}
+
+func TestCollector_Collect_MarkupChanged(t *testing.T) {
+	// A substantial page (>10KB) that parses to 0 repos means the trending
+	// markup changed; Collect must fail loudly instead of returning empty
+	// success.
+	html := fmt.Sprintf(`<html><body>%s</body></html>`, strings.Repeat("x", 12*1024))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	c := NewWithBaseURL(server.URL)
+	articles, err := c.Collect(context.Background(), collector.Options{Limit: 10})
+
+	if err == nil {
+		t.Fatalf("Collect() expected error for large page with 0 parsed repos, got %d articles", len(articles))
+	}
+	if !strings.Contains(err.Error(), "0 repos parsed") {
+		t.Errorf("Collect() error = %v, want it to mention \"0 repos parsed\"", err)
+	}
+	if !strings.Contains(err.Error(), "markup may have changed") {
+		t.Errorf("Collect() error = %v, want it to mention \"markup may have changed\"", err)
+	}
+}
+
+func TestCollector_Collect_SmallEmptyPage(t *testing.T) {
+	// A small page (<10KB) with no repos is treated as legitimately empty,
+	// not as a markup failure.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html><body>empty</body></html>"))
+	}))
+	defer server.Close()
+
+	c := NewWithBaseURL(server.URL)
+	articles, err := c.Collect(context.Background(), collector.Options{Limit: 10})
+
+	if err != nil {
+		t.Fatalf("Collect() error = %v, want nil for small empty page", err)
+	}
+	if len(articles) != 0 {
+		t.Errorf("Collect() got %d articles, want 0", len(articles))
 	}
 }
 

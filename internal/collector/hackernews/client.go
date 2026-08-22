@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/anthropic/autonomous-runner/internal/httpclient"
+	"github.com/majiayu000/techpulse/internal/httpclient"
 )
 
 const defaultBaseURL = "https://hacker-news.firebaseio.com/v0"
@@ -72,6 +72,13 @@ func (c *Client) FetchItem(ctx context.Context, id int) (*Item, error) {
 	var item Item
 	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	// The HN Firebase API answers with a literal `null` body for unknown or
+	// purged items. Decoding that yields a zero Item without error, which
+	// would silently vanish downstream; treat it as a failed fetch.
+	if item.ID == 0 {
+		return nil, fmt.Errorf("item %d not found (null response)", id)
 	}
 
 	return &item, nil

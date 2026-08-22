@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
 )
 
 func TestCollectorName(t *testing.T) {
@@ -88,7 +88,7 @@ func TestCollectorCollect(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClientWithBaseURL(server.URL)
+	client := newFastTestClient(server.URL)
 	c := NewWithClient("top", client)
 
 	ctx := context.Background()
@@ -114,6 +114,30 @@ func TestCollectorCollect(t *testing.T) {
 	}
 }
 
+func TestCollectorCollectAllItemsFail(t *testing.T) {
+	// Story list succeeds, but every item fetch returns Firebase's "null"
+	// body: Collect must surface an error instead of empty-but-success.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/topstories.json" {
+			json.NewEncoder(w).Encode([]int{1, 2})
+			return
+		}
+		w.Write([]byte("null"))
+	}))
+	defer server.Close()
+
+	c := NewWithClient("top", newFastTestClient(server.URL))
+
+	ctx := context.Background()
+	articles, err := c.Collect(ctx, collector.Options{Limit: 10})
+	if err == nil {
+		t.Fatal("expected an error when every item fetch fails")
+	}
+	if articles != nil {
+		t.Errorf("expected no articles on failure, got %d", len(articles))
+	}
+}
+
 func TestCollectorCollectWithLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/topstories.json" {
@@ -135,7 +159,7 @@ func TestCollectorCollectWithLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClientWithBaseURL(server.URL)
+	client := newFastTestClient(server.URL)
 	c := NewWithClient("top", client)
 
 	ctx := context.Background()
@@ -176,7 +200,7 @@ func TestCollectorCollectWithTimeFilter(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClientWithBaseURL(server.URL)
+	client := newFastTestClient(server.URL)
 	c := NewWithClient("top", client)
 
 	ctx := context.Background()
@@ -221,7 +245,7 @@ func TestCollectorCollectSkipsDeadItems(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClientWithBaseURL(server.URL)
+	client := newFastTestClient(server.URL)
 	c := NewWithClient("top", client)
 
 	ctx := context.Background()

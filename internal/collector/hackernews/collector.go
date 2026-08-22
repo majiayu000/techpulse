@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
 )
 
 // Collector collects articles from Hacker News.
@@ -61,8 +61,13 @@ func (c *Collector) Collect(ctx context.Context, opts collector.Options) ([]coll
 	}
 	ids = ids[:limit]
 
-	// Fetch items concurrently
-	items := c.client.FetchItemsConcurrently(ctx, ids, DefaultConcurrency)
+	// Fetch items concurrently, failing closed on total failure or context
+	// cancellation instead of silently reporting partial data as success.
+	res := c.client.fetchItemsConcurrently(ctx, ids, DefaultConcurrency)
+	if res.err != nil {
+		return nil, fmt.Errorf("fetch items: %w", res.err)
+	}
+	items := res.items
 
 	// Filter and convert to articles
 	articles := make([]collector.Article, 0, len(items))

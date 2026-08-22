@@ -40,7 +40,7 @@ type Options struct {
 	Limit    int           // Maximum number of articles to collect
 	Since    time.Time     // Collect articles published after this time
 	Category string        // Category filter (source-specific)
-	Timeout  time.Duration // Request timeout
+	Timeout  time.Duration // Upper bound for a single Collect call; zero means no deadline beyond ctx
 }
 
 // Result represents the outcome of a collection operation.

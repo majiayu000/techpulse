@@ -4,10 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/httpclient"
+	"github.com/majiayu000/techpulse/internal/logger"
 )
 
 const testRSSFeed = `<?xml version="1.0" encoding="UTF-8"?>
@@ -36,6 +39,95 @@ const testRSSFeed = `<?xml version="1.0" encoding="UTF-8"?>
     </item>
   </channel>
 </rss>`
+
+// testAtomFeed mirrors the shape of The Verge's Atom feed
+// (https://www.theverge.com/rss/index.xml): a root <feed> element whose
+// entries carry id/link/published/updated/author/content/category.
+const testAtomFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>The Verge</title>
+  <id>https://www.theverge.com/rss/index.xml</id>
+  <updated>2026-01-01T11:00:00Z</updated>
+  <link rel="self" href="https://www.theverge.com/rss/index.xml"/>
+  <link rel="alternate" type="text/html" href="https://www.theverge.com/"/>
+  <entry>
+    <id>https://www.theverge.com/24300000/verge-article-one</id>
+    <title>Verge Article One</title>
+    <link rel="alternate" type="text/html" href="https://www.theverge.com/24300000/verge-article-one"/>
+    <published>2026-01-01T10:00:00.5Z</published>
+    <updated>2026-01-01T10:05:00Z</updated>
+    <author>
+      <name>Alice Reporter</name>
+    </author>
+    <content type="html">&lt;p&gt;Verge article one content&lt;/p&gt;</content>
+    <category term="Tech"/>
+    <category term="AI"/>
+  </entry>
+  <entry>
+    <id>tag:theverge.com,2026:verge-article-two</id>
+    <title>Verge Article Two</title>
+    <link href="https://www.theverge.com/24300001/verge-article-two"/>
+    <updated>2026-01-01T09:00:00Z</updated>
+    <author><name>Bob Writer</name></author>
+    <summary>Second Verge article summary</summary>
+    <category label="Gadgets" term="gadgets"/>
+  </entry>
+  <entry>
+    <id>tag:theverge.com,2026:verge-article-three</id>
+    <title>Verge Article Three</title>
+    <published>2026-01-01T08:00:00Z</published>
+    <summary>No links at all</summary>
+  </entry>
+</feed>`
+
+// testRSSFeedUnknownDate covers items whose publication date cannot be
+// parsed alongside an item that is unambiguously older than any Since cut.
+const testRSSFeedUnknownDate = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Unknown Date Feed</title>
+    <item>
+      <title>Unknown Date Article</title>
+      <link>https://example.com/unknown</link>
+      <description>Date cannot be parsed</description>
+      <pubDate>not-a-date</pubDate>
+      <guid>unknown-1</guid>
+    </item>
+    <item>
+      <title>Old Article</title>
+      <link>https://example.com/old</link>
+      <description>Older than the Since cutoff</description>
+      <pubDate>Mon, 01 Jan 2026 08:00:00 +0000</pubDate>
+      <guid>old-1</guid>
+    </item>
+  </channel>
+</rss>`
+
+// newFastCollector builds a collector from one or more feed lists whose
+// HTTP client uses tiny retry backoff values so tests exercise the real
+// retry path without sleeping through the default 500ms-10s schedule.
+func newFastCollector(feedSources ...[]Source) *Collector {
+	var sources []Source
+	for _, fs := range feedSources {
+		sources = append(sources, fs...)
+	}
+	c := New(sources)
+	cfg := httpclient.DefaultRetryConfig()
+	cfg.InitialDelay = time.Millisecond
+	cfg.MaxDelay = 5 * time.Millisecond
+	c.httpClient = httpclient.New(httpclient.WithRetryConfig(cfg))
+	return c
+}
+
+// mustParseTime parses a fixture timestamp or fails the test.
+func mustParseTime(t *testing.T, layout, value string) time.Time {
+	t.Helper()
+	ts, err := time.Parse(layout, value)
+	if err != nil {
+		t.Fatalf("time.Parse(%q, %q) failed: %v", layout, value, err)
+	}
+	return ts
+}
 
 func TestCollectorName(t *testing.T) {
 	c := New([]Source{{Name: "Test", URL: "http://test.com/feed"}})
@@ -79,7 +171,7 @@ func TestCollectorCollect(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New([]Source{{Name: "TestFeed", URL: server.URL}})
+	c := newFastCollector([]Source{{Name: "TestFeed", URL: server.URL}})
 
 	ctx := context.Background()
 	articles, err := c.Collect(ctx, collector.Options{Limit: 10})
@@ -106,6 +198,29 @@ func TestCollectorCollect(t *testing.T) {
 	}
 }
 
+// TestCollectorCollectAtom verifies Atom feeds decode into the same article
+// shape as RSS, using a fixture shaped like the real Verge feed.
+func TestCollectorCollectAtom(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/atom+xml")
+		w.Write([]byte(testAtomFeed))
+	}))
+	defer server.Close()
+
+	c := newFastCollector([]Source{{Name: "TheVerge", URL: server.URL}})
+	c.WithLogger(logger.NewNopLogger())
+
+	ctx := context.Background()
+	articles, err := c.Collect(ctx, collector.Options{Limit: 10})
+	if err != nil {
+		t.Fatalf("Collect() error: %v", err)
+	}
+
+	if len(articles) != 3 {
+		t.Fatalf("expected 3 articles from Atom feed, got %d", len(articles))
+	}
+}
+
 func TestCollectorCollectWithLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
@@ -113,7 +228,7 @@ func TestCollectorCollectWithLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New([]Source{{Name: "TestFeed", URL: server.URL}})
+	c := newFastCollector([]Source{{Name: "TestFeed", URL: server.URL}})
 
 	ctx := context.Background()
 	articles, err := c.Collect(ctx, collector.Options{Limit: 1})
@@ -128,15 +243,14 @@ func TestCollectorCollectWithLimit(t *testing.T) {
 
 func TestCollectorCollectWithTimeFilter(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/xml")
 		w.Write([]byte(testRSSFeed))
 	}))
 	defer server.Close()
 
-	c := New([]Source{{Name: "TestFeed", URL: server.URL}})
+	c := newFastCollector([]Source{{Name: "TestFeed", URL: server.URL}})
 
-	// Filter for articles after 9:30
-	since, _ := time.Parse(time.RFC1123Z, "Mon, 01 Jan 2026 09:30:00 +0000")
+	// Filter for articles published after 09:30
+	since := mustParseTime(t, time.RFC1123Z, "Mon, 01 Jan 2026 09:30:00 +0000")
 
 	ctx := context.Background()
 	articles, err := c.Collect(ctx, collector.Options{
@@ -164,10 +278,10 @@ func TestCollectorCollectMultipleSources(t *testing.T) {
 	}))
 	defer server2.Close()
 
-	c := New([]Source{
-		{Name: "Feed1", URL: server1.URL},
-		{Name: "Feed2", URL: server2.URL},
-	})
+	c := newFastCollector(
+		[]Source{{Name: "Feed1", URL: server1.URL}},
+		[]Source{{Name: "Feed2", URL: server2.URL}},
+	)
 
 	ctx := context.Background()
 	articles, err := c.Collect(ctx, collector.Options{Limit: 100})
@@ -181,6 +295,8 @@ func TestCollectorCollectMultipleSources(t *testing.T) {
 	}
 }
 
+// TestCollectorCollectSourceError verifies partial success stays non-fatal:
+// a failing feed is skipped (and logged), healthy feeds still contribute.
 func TestCollectorCollectSourceError(t *testing.T) {
 	goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(testRSSFeed))
@@ -192,46 +308,256 @@ func TestCollectorCollectSourceError(t *testing.T) {
 	}))
 	defer badServer.Close()
 
-	c := New([]Source{
-		{Name: "Good", URL: goodServer.URL},
-		{Name: "Bad", URL: badServer.URL},
-	})
+	c := newFastCollector(
+		[]Source{{Name: "Good", URL: goodServer.URL}},
+		[]Source{{Name: "Bad", URL: badServer.URL}},
+	).WithLogger(logger.NewNopLogger())
 
 	ctx := context.Background()
 	articles, err := c.Collect(ctx, collector.Options{Limit: 10})
 
-	// Should not return error, but skip bad source
+	// Partial success is not an error.
 	if err != nil {
-		t.Fatalf("Collect() should not error: %v", err)
+		t.Fatalf("Collect() should not error on partial failure: %v", err)
 	}
 
-	// Should still get articles from good source
+	// Should still get articles from the good source
 	if len(articles) != 2 {
 		t.Errorf("expected 2 articles from good source, got %d", len(articles))
 	}
 }
 
+// TestCollectorCollectAllFeedsFail verifies that when every feed fails,
+// Collect surfaces an error naming the failed sources instead of silently
+// returning zero articles.
+func TestCollectorCollectAllFeedsFail(t *testing.T) {
+	badServer1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer badServer1.Close()
+
+	badServer2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer badServer2.Close()
+
+	c := newFastCollector(
+		[]Source{{Name: "BadOne", URL: badServer1.URL}},
+		[]Source{{Name: "BadTwo", URL: badServer2.URL}},
+	).WithLogger(logger.NewNopLogger())
+
+	ctx := context.Background()
+	articles, err := c.Collect(ctx, collector.Options{Limit: 10})
+
+	if err == nil {
+		t.Fatal("Collect() should return an error when all feeds fail")
+	}
+	if articles != nil {
+		t.Errorf("expected no articles when all feeds fail, got %d", len(articles))
+	}
+	for _, want := range []string{"all 2 RSS feeds failed", "BadOne", "BadTwo"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err.Error(), want)
+		}
+	}
+}
+
+// TestCollectorCollectUnsupportedFeed verifies fail-closed behavior: a
+// document that is neither RSS nor Atom produces an error, not zero
+// articles.
+func TestCollectorCollectUnsupportedFeed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html><body>not a feed</body></html>"))
+	}))
+	defer server.Close()
+
+	c := newFastCollector([]Source{{Name: "NotAFeed", URL: server.URL}}).
+		WithLogger(logger.NewNopLogger())
+
+	ctx := context.Background()
+	articles, err := c.Collect(ctx, collector.Options{Limit: 10})
+
+	if err == nil {
+		t.Fatal("Collect() should error on an unsupported feed format")
+	}
+	if articles != nil {
+		t.Errorf("expected no articles, got %d", len(articles))
+	}
+	if !strings.Contains(err.Error(), "unsupported feed format") {
+		t.Errorf("error %q should mention unsupported feed format", err.Error())
+	}
+}
+
+// TestCollectorCollectLimitRoundRobin verifies the limit is applied
+// round-robin across feeds so later feeds are not truncated away entirely.
+func TestCollectorCollectLimitRoundRobin(t *testing.T) {
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(testRSSFeed))
+	}))
+	defer server1.Close()
+
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(testRSSFeed))
+	}))
+	defer server2.Close()
+
+	c := newFastCollector(
+		[]Source{{Name: "Feed1", URL: server1.URL}},
+		[]Source{{Name: "Feed2", URL: server2.URL}},
+	).WithLogger(logger.NewNopLogger())
+
+	ctx := context.Background()
+	articles, err := c.Collect(ctx, collector.Options{Limit: 2})
+	if err != nil {
+		t.Fatalf("Collect() error: %v", err)
+	}
+
+	if len(articles) != 2 {
+		t.Fatalf("expected 2 articles (1 per feed), got %d", len(articles))
+	}
+	if got := articles[0].Metadata["feed_name"]; got != "Feed1" {
+		t.Errorf("articles[0] feed_name = %q, want Feed1", got)
+	}
+	if got := articles[1].Metadata["feed_name"]; got != "Feed2" {
+		t.Errorf("articles[1] feed_name = %q, want Feed2", got)
+	}
+}
+
+// TestCollectorCollectTimeFilterKeepsUnknownDates verifies items with
+// unparseable dates are kept (with zero PublishedAt) under a Since filter,
+// while known older dates are still filtered out.
+func TestCollectorCollectTimeFilterKeepsUnknownDates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(testRSSFeedUnknownDate))
+	}))
+	defer server.Close()
+
+	c := newFastCollector([]Source{{Name: "TestFeed", URL: server.URL}}).
+		WithLogger(logger.NewNopLogger())
+
+	since := mustParseTime(t, time.RFC3339, "2026-01-01T09:30:00Z")
+
+	ctx := context.Background()
+	articles, err := c.Collect(ctx, collector.Options{Limit: 10, Since: since})
+	if err != nil {
+		t.Fatalf("Since filtering should not error, got: %v", err)
+	}
+
+	if len(articles) != 1 {
+		t.Fatalf("expected 1 article (unknown date kept, old filtered), got %d", len(articles))
+	}
+	if articles[0].Title != "Unknown Date Article" {
+		t.Errorf("expected unknown-date article kept, got %q", articles[0].Title)
+	}
+	if !articles[0].PublishedAt.IsZero() {
+		t.Errorf("unknown-date article should keep zero PublishedAt, got %v", articles[0].PublishedAt)
+	}
+}
+
+// TestApplyLimit unit-tests the round-robin truncation directly.
+func TestApplyLimit(t *testing.T) {
+	mk := func(names ...string) []collector.Article {
+		out := make([]collector.Article, 0, len(names))
+		for _, n := range names {
+			out = append(out, collector.Article{Title: n})
+		}
+		return out
+	}
+	titles := func(articles []collector.Article) []string {
+		out := make([]string, 0, len(articles))
+		for _, a := range articles {
+			out = append(out, a.Title)
+		}
+		return out
+	}
+	equal := func(got, want []string) bool {
+		if len(got) != len(want) {
+			return false
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	tests := []struct {
+		name  string
+		feeds [][]collector.Article
+		limit int
+		want  []string
+	}{
+		{
+			name:  "no limit keeps feed order",
+			feeds: [][]collector.Article{mk("a1", "a2"), mk("b1")},
+			limit: 0,
+			want:  []string{"a1", "a2", "b1"},
+		},
+		{
+			name:  "limit at or above total is a no-op",
+			feeds: [][]collector.Article{mk("a1"), mk("b1")},
+			limit: 10,
+			want:  []string{"a1", "b1"},
+		},
+		{
+			name:  "truncation is round-robin across feeds",
+			feeds: [][]collector.Article{mk("a1", "a2", "a3"), mk("b1", "b2", "b3"), mk("c1")},
+			limit: 4,
+			want:  []string{"a1", "b1", "c1", "a2"},
+		},
+		{
+			name:  "uneven feeds still interleave",
+			feeds: [][]collector.Article{mk("a1", "a2", "a3"), mk("b1")},
+			limit: 3,
+			want:  []string{"a1", "b1", "a2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := applyLimit(tt.feeds, tt.limit)
+			if !equal(titles(got), tt.want) {
+				t.Errorf("applyLimit() = %v, want %v", titles(got), tt.want)
+			}
+		})
+	}
+}
+
+// TestCollectorParseTime verifies common feed layouts parse exactly,
+// including RFC 3339 with fractional seconds, and that unparseable or empty
+// values yield the zero time instead of a fabricated "now".
 func TestCollectorParseTime(t *testing.T) {
 	c := New(nil)
 
 	tests := []struct {
 		input    string
+		want     time.Time
 		wantZero bool
 	}{
-		{"Mon, 01 Jan 2026 10:00:00 +0000", false}, // RFC1123Z
-		{"Mon, 01 Jan 2026 10:00:00 GMT", false},   // RFC1123
-		{"2026-01-01T10:00:00Z", false},            // ISO 8601
-		{"", false},                                 // Empty returns now
-		{"invalid", false},                          // Invalid returns now
+		{input: "Mon, 01 Jan 2026 10:00:00 +0000", want: mustParseTime(t, time.RFC1123Z, "Mon, 01 Jan 2026 10:00:00 +0000")},
+		{input: "Mon, 01 Jan 2026 10:00:00 GMT", want: mustParseTime(t, time.RFC1123, "Mon, 01 Jan 2026 10:00:00 GMT")},
+		{input: "2026-01-01T10:00:00Z", want: mustParseTime(t, time.RFC3339, "2026-01-01T10:00:00Z")},
+		{input: "2026-01-01T10:00:00.123456789Z", want: mustParseTime(t, time.RFC3339Nano, "2026-01-01T10:00:00.123456789Z")},
+		{input: "2026-01-01T12:00:00.25+02:00", want: mustParseTime(t, time.RFC3339Nano, "2026-01-01T12:00:00.25+02:00")},
+		{input: "", wantZero: true},
+		{input: "invalid", wantZero: true},
 	}
 
 	for _, tt := range tests {
 		got := c.parseTime(tt.input)
-		if tt.wantZero && !got.IsZero() {
-			t.Errorf("parseTime(%q) should be zero", tt.input)
+		if tt.wantZero {
+			if !got.IsZero() {
+				t.Errorf("parseTime(%q) = %v, want zero time", tt.input, got)
+			}
+			continue
 		}
-		if !tt.wantZero && got.IsZero() {
-			t.Errorf("parseTime(%q) should not be zero", tt.input)
+		if got.IsZero() {
+			t.Errorf("parseTime(%q) returned zero time, want %v", tt.input, tt.want)
+			continue
+		}
+		if !got.Equal(tt.want) {
+			t.Errorf("parseTime(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

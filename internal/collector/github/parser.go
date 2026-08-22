@@ -1,6 +1,7 @@
 package github
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,21 +15,26 @@ func NewParser() *Parser {
 	return &Parser{}
 }
 
-// Parse extracts repositories from HTML content.
-func (p *Parser) Parse(html string) []Repository {
+// Parse extracts repositories from HTML content. It returns an error if any
+// numeric field in an article block cannot be parsed, rather than silently
+// treating it as zero.
+func (p *Parser) Parse(html string) ([]Repository, error) {
 	var repos []Repository
 
 	// Find all article elements (each trending repo)
 	articles := findAllArticles(html)
 
-	for _, article := range articles {
-		repo := p.parseArticle(article)
+	for i, article := range articles {
+		repo, err := p.parseArticle(article)
+		if err != nil {
+			return nil, fmt.Errorf("parse article %d: %w", i, err)
+		}
 		if repo.Name != "" {
 			repos = append(repos, repo)
 		}
 	}
 
-	return repos
+	return repos, nil
 }
 
 // findAllArticles extracts article HTML blocks from the page.
@@ -45,16 +51,31 @@ func findAllArticles(html string) []string {
 }
 
 // parseArticle parses a single article HTML block.
-func (p *Parser) parseArticle(html string) Repository {
+func (p *Parser) parseArticle(html string) (Repository, error) {
+	stars, err := extractStars(html)
+	if err != nil {
+		return Repository{}, fmt.Errorf("stars: %w", err)
+	}
+
+	starsToday, err := extractStarsToday(html)
+	if err != nil {
+		return Repository{}, fmt.Errorf("stars today: %w", err)
+	}
+
+	forks, err := extractForks(html)
+	if err != nil {
+		return Repository{}, fmt.Errorf("forks: %w", err)
+	}
+
 	return Repository{
 		Name:        extractRepoName(html),
 		URL:         extractRepoURL(html),
 		Description: extractDescription(html),
 		Language:    extractLanguage(html),
-		Stars:       extractStars(html),
-		StarsToday:  extractStarsToday(html),
-		Forks:       extractForks(html),
-	}
+		Stars:       stars,
+		StarsToday:  starsToday,
+		Forks:       forks,
+	}, nil
 }
 
 // extractRepoName extracts "owner/repo" from HTML.
@@ -100,7 +121,7 @@ func extractLanguage(html string) string {
 }
 
 // extractStars extracts total star count.
-func extractStars(html string) int {
+func extractStars(html string) (int, error) {
 	// Pattern 1: stargazers link with SVG, then number before </a> (2024+ structure)
 	re := regexp.MustCompile(`(?s)href="/[^/]+/[^/]+/stargazers"[^>]*>.*?</svg>\s*([0-9,]+)\s*</a>`)
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
@@ -111,11 +132,11 @@ func extractStars(html string) int {
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return parseNumber(m[1])
 	}
-	return 0
+	return 0, nil
 }
 
 // extractForks extracts fork count.
-func extractForks(html string) int {
+func extractForks(html string) (int, error) {
 	// Pattern 1: forks link with SVG, then number before </a> (2024+ structure)
 	re := regexp.MustCompile(`(?s)href="/[^/]+/[^/]+/forks"[^>]*>.*?</svg>\s*([0-9,]+)\s*</a>`)
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
@@ -126,24 +147,28 @@ func extractForks(html string) int {
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return parseNumber(m[1])
 	}
-	return 0
+	return 0, nil
 }
 
 // extractStarsToday extracts stars gained today.
-func extractStarsToday(html string) int {
+func extractStarsToday(html string) (int, error) {
 	re := regexp.MustCompile(`([0-9,]+)\s*stars?\s*(today|this week|this month)`)
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return parseNumber(m[1])
 	}
-	return 0
+	return 0, nil
 }
 
-// parseNumber converts string with commas to int.
-func parseNumber(s string) int {
+// parseNumber converts a comma-separated numeric string to an int. It returns
+// an error for unparsable input instead of silently yielding zero.
+func parseNumber(s string) (int, error) {
 	s = strings.ReplaceAll(s, ",", "")
 	s = strings.TrimSpace(s)
-	n, _ := strconv.Atoi(s)
-	return n
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number %q: %w", s, err)
+	}
+	return n, nil
 }
 
 // cleanText removes HTML tags and extra whitespace.
