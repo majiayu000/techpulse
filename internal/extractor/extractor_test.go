@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/anthropic/autonomous-runner/internal/httpclient"
+	"github.com/majiayu000/techpulse/internal/httpclient"
 )
 
 func TestDefaultConfig(t *testing.T) {

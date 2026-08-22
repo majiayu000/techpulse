@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
-	"github.com/anthropic/autonomous-runner/internal/filter"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/filter"
 )
 
 func TestComputeStats(t *testing.T) {

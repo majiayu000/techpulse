@@ -41,6 +41,56 @@ func TestRemoveBoilerplate(t *testing.T) {
 			html: "<article><p>Important content here</p></article>",
 			want: "<article><p>Important content here</p></article>",
 		},
+		{
+			name: "keeps download-link class (substring of ad keyword)",
+			html: `<div class="download-link">Get the release notes.</div>`,
+			want: `<div class="download-link">Get the release notes.</div>`,
+		},
+		{
+			name: "keeps read-more-btn class",
+			html: `<span class="read-more-btn">Continue the tour</span>`,
+			want: `<span class="read-more-btn">Continue the tour</span>`,
+		},
+		{
+			name: "keeps upload-form class",
+			html: `<div class="upload-form">Drop your files here.</div>`,
+			want: `<div class="upload-form">Drop your files here.</div>`,
+		},
+		{
+			name: "removes element with ad class through its own close tag",
+			html: `<div class="ad-banner">Buy stuff now</div><p>Story</p>`,
+			want: ` <p>Story</p>`,
+		},
+		{
+			name: "removes element with ad id attribute",
+			html: `<div id="cookie-consent">Accept cookies?</div><p>Story</p>`,
+			want: ` <p>Story</p>`,
+		},
+		{
+			name: "closes at matching tag, not first closing tag of any element",
+			html: `<div class="share"><p>Share us</p></div><p>Keep me</p>`,
+			want: ` <p>Keep me</p>`,
+		},
+		{
+			name: "removes ad element nested in innocent parent",
+			html: `<div><div class="promo-box">Deal</div><p>Keep</p></div>`,
+			want: `<div> <p>Keep</p></div>`,
+		},
+		{
+			name: "checks later attributes too when first class attr is innocent",
+			html: `<div class="story" id="ad-slot">Ad body</div><p>Story</p>`,
+			want: ` <p>Story</p>`,
+		},
+		{
+			name: "keeps unclosed ad element instead of truncating document",
+			html: `<p>Before</p><div class="ad-banner">Unclosed ad and more text`,
+			want: `<p>Before</p><div class="ad-banner">Unclosed ad and more text`,
+		},
+		{
+			name: "removes self-closing ad tag only",
+			html: `<div class="ads"/><p>Story</p>`,
+			want: ` <p>Story</p>`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -48,6 +98,39 @@ func TestRemoveBoilerplate(t *testing.T) {
 			got := removeBoilerplate(tt.html)
 			if got != tt.want {
 				t.Errorf("removeBoilerplate() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdTokenHasKeyword(t *testing.T) {
+	tests := []struct {
+		tok  string
+		kw   string
+		want bool
+	}{
+		{"ad-banner", "ad", true},
+		{"ads-sidebar", "ads", true},
+		{"data-ad-slot", "ad", true},
+		{"top-ad", "ad", true},
+		{"top_ads", "ads", true},
+		{"download-link", "ad", false},
+		{"upload-form", "ad", false},
+		{"read-more-btn", "ad", false},
+		{"breadcrumb", "ad", false},
+		{"head", "ad", false},
+		{"banner-image", "banner", true},
+		{"banners", "banner", false},
+		{"social-links", "social", true},
+		{"share-promo", "share", true},
+		{"share-promo", "promo", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tok+"~"+tt.kw, func(t *testing.T) {
+			got := adTokenHasKeyword(tt.tok, tt.kw)
+			if got != tt.want {
+				t.Errorf("adTokenHasKeyword(%q, %q) = %v, want %v", tt.tok, tt.kw, got, tt.want)
 			}
 		})
 	}
@@ -86,30 +169,67 @@ func TestExtractMainContent(t *testing.T) {
 	}
 }
 
-func TestExtractParagraphs(t *testing.T) {
+func TestExtractMainContentNestedArticle(t *testing.T) {
 	tests := []struct {
 		name       string
 		html       string
-		wantCount  int
-		wantFirst  string
+		wantSubstr []string // all must appear in extracted content
 	}{
 		{
-			name:       "extracts long paragraphs",
-			html:       "<p>This is a paragraph with more than fifty characters of content here.</p>",
-			wantCount:  1,
-			wantFirst:  "This is a paragraph with more than fifty characters of content here.",
+			name: "nested article teaser does not truncate body",
+			html: `<article><h1>Listing</h1>` +
+				`<article class="teaser"><p>Teaser summary text</p></article>` +
+				`<p>Main story body continues here</p></article>`,
+			wantSubstr: []string{"Teaser summary text", "Main story body continues here"},
 		},
 		{
-			name:       "ignores short paragraphs",
-			html:       "<p>Short</p><p>This is a longer paragraph that has enough content.</p>",
-			wantCount:  1,
-			wantFirst:  "This is a longer paragraph that has enough content.",
+			name:       "sibling articles return first",
+			html:       `<article>First story</article><article>Second story</article>`,
+			wantSubstr: []string{"First story"},
 		},
 		{
-			name:       "handles nested tags",
-			html:       "<p>This paragraph has <strong>bold</strong> text and more content to make it long enough.</p>",
-			wantCount:  1,
-			wantFirst:  "This paragraph has bold text and more content to make it long enough.",
+			name:       "unclosed article falls through to main",
+			html:       `<article>Broken <main>Fallback content</main>`,
+			wantSubstr: []string{"Fallback content"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractMainContent(tt.html)
+			for _, sub := range tt.wantSubstr {
+				if !strings.Contains(got, sub) {
+					t.Errorf("extractMainContent() = %q, want to contain %q", got, sub)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractParagraphs(t *testing.T) {
+	tests := []struct {
+		name      string
+		html      string
+		wantCount int
+		wantFirst string
+	}{
+		{
+			name:      "extracts long paragraphs",
+			html:      "<p>This is a paragraph with more than fifty characters of content here.</p>",
+			wantCount: 1,
+			wantFirst: "This is a paragraph with more than fifty characters of content here.",
+		},
+		{
+			name:      "ignores short paragraphs",
+			html:      "<p>Short</p><p>This is a longer paragraph that has enough content.</p>",
+			wantCount: 1,
+			wantFirst: "This is a longer paragraph that has enough content.",
+		},
+		{
+			name:      "handles nested tags",
+			html:      "<p>This paragraph has <strong>bold</strong> text and more content to make it long enough.</p>",
+			wantCount: 1,
+			wantFirst: "This paragraph has bold text and more content to make it long enough.",
 		},
 	}
 
@@ -137,6 +257,12 @@ func TestIsBoilerplate(t *testing.T) {
 		{"Subscribe to get updates...", true},
 		{"This is a regular article about technology.", false},
 		{"AI research shows promising results.", false},
+		// Phrases must match at the start at a word boundary, not anywhere.
+		{"Developers can now sign in with passkeys.", false},
+		{"The menu offers three viewing modes for readers.", false},
+		{"Registration is open for new contributors.", false},
+		{"Readers share on social media every day.", false},
+		{"Menu navigation help is available.", true},
 	}
 
 	for _, tt := range tests {
@@ -174,6 +300,16 @@ func TestFindCleanStart(t *testing.T) {
 			name:  "handles multiple boilerplate sentences",
 			input: "Cookie notice. Sign up now. Real article content about programming.",
 			want:  "Real article content about programming.",
+		},
+		{
+			name:  "keeps sentences that merely contain boilerplate phrases",
+			input: "Developers can now sign in with passkeys. The rest of this story explains how.",
+			want:  "Developers can now sign in with passkeys. The rest of this story explains how.",
+		},
+		{
+			name:  "keeps sentence mentioning menu mid-sentence",
+			input: "The menu of supported formats keeps growing every release.",
+			want:  "The menu of supported formats keeps growing every release.",
 		},
 	}
 

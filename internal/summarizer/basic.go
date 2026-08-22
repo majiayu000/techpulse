@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/filter"
+	"github.com/majiayu000/techpulse/internal/filter"
 )
 
 // BasicSummarizer provides a simple scoring implementation without AI.
@@ -33,9 +33,17 @@ func (s *BasicSummarizer) Enrich(ctx context.Context, articles []filter.Filtered
 		result = append(result, enriched)
 	}
 
-	// Sort by importance descending
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Importance > result[j].Importance
+	// Sort by importance descending. Break ties deterministically by source,
+	// then title, so identical inputs always produce identical ordering (and
+	// therefore identical Top-Stories sections) across runs.
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Importance != result[j].Importance {
+			return result[i].Importance > result[j].Importance
+		}
+		if result[i].Source != result[j].Source {
+			return result[i].Source < result[j].Source
+		}
+		return result[i].Title < result[j].Title
 	})
 
 	return result, nil
