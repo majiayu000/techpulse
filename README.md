@@ -232,24 +232,27 @@ make test-cover-html   # Generate HTML report and open in browser
 
 ### Test Coverage
 
-Current coverage by module:
+Measured with `go test -cover` (statement-weighted total via `go tool cover`):
 
 | Module | Coverage |
 |--------|----------|
-| filter | 100.0% |
-| extractor | 96.6% |
-| summarizer | 96.4% |
-| rss | 95.7% |
-| techpulse | 93.6% |
-| hackernews | 92.9% |
-| reddit | 90.9% |
-| progress | 90.2% |
-| storage | 88.9% |
-| github | 88.1% |
+| filter | 97.6% |
+| summarizer | 95.9% |
+| reddit | 94.4% |
+| extractor | 92.6% |
+| rss | 92.1% |
+| progress | 91.9% |
+| techpulse | 91.7% |
+| hackernews | 90.3% |
+| httpclient | 89.5% |
+| github | 87.4% |
+| storage | 87.1% |
 | lobsters | 87.0% |
-| httpclient | 86.1% |
 | logger | 85.7% |
-| **Total** | **82.8%** |
+| memory | 75.9% |
+| collector (registry) | 65.5% |
+| cmd/techpulse | 63.7% |
+| **Total** | **88.2%** |
 
 ### Make Commands
 
@@ -271,7 +274,7 @@ make help             # Show all commands
 
 - Each `.go` file is under 200 lines
 - Clean module boundaries with interfaces
-- Comprehensive test coverage (170+ tests, 82%+ coverage)
+- Comprehensive test coverage (336 tests, 88% statement coverage)
 
 ## License
 
