@@ -208,14 +208,14 @@ func (s *MarkdownStorage) articlesToMarkdown(articles []summarizer.EnrichedArtic
 		md += fmt.Sprintf("## %s (%d articles)\n\n", source, len(sourceArticles))
 
 		for _, a := range sourceArticles {
-			md += fmt.Sprintf("### [%s](%s)\n", a.Title, a.URL)
+			md += fmt.Sprintf("### %s\n", summarizer.MarkdownLink(a.Title, a.URL))
 			md += fmt.Sprintf("- Score: %d | Comments: %d | Importance: %.1f/10\n",
 				a.Score, a.Comments, a.Importance)
 			if len(a.MatchedKeywords) > 0 {
 				md += fmt.Sprintf("- Keywords: %v\n", a.MatchedKeywords)
 			}
 			if a.Author != "" {
-				md += fmt.Sprintf("- Author: %s\n", a.Author)
+				md += fmt.Sprintf("- Author: %s\n", summarizer.SanitizeMarkdownText(a.Author))
 			}
 			md += "\n"
 		}

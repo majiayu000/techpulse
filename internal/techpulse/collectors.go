@@ -86,7 +86,10 @@ func (t *timeoutCollector) Collect(ctx context.Context, opts collector.Options) 
 	defer cancel()
 
 	articles, err := t.inner.Collect(cctx, opts)
-	if err != nil && cctx.Err() == context.DeadlineExceeded {
+	// Only relabel as a per-source timeout when the PARENT context is still
+	// healthy; otherwise cctx merely inherited the parent's deadline error
+	// and the real cause would be misreported for every source.
+	if err != nil && ctx.Err() == nil && cctx.Err() == context.DeadlineExceeded {
 		return articles, fmt.Errorf("%s exceeded timeout %s: %w", t.inner.Name(), timeout, err)
 	}
 	return articles, err

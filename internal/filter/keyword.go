@@ -56,6 +56,11 @@ func NewKeywordFilter(include, exclude []string) *KeywordFilter {
 // It returns nil if the keyword cannot be compiled.
 func compileIncludePattern(kw string) *regexp.Regexp {
 	isWordRune := func(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
+	// Go's \b matches only between an ASCII word char and a non-word char,
+	// so anchoring a keyword whose edge rune is non-ASCII (CJK etc.) would
+	// make the pattern unmatchable. Only anchor ASCII-word edges; other
+	// keywords fall back to substring matching.
+	isASCIIWordEdge := func(r rune) bool { return r <= utf8.RuneSelf && r != utf8.RuneError && isWordRune(r) }
 
 	first, _ := utf8.DecodeRuneInString(kw)
 	last, _ := utf8.DecodeLastRuneInString(kw)
@@ -63,11 +68,11 @@ func compileIncludePattern(kw string) *regexp.Regexp {
 
 	var b strings.Builder
 	b.WriteString("(?i)")
-	if !phrase && first != utf8.RuneError && isWordRune(first) {
+	if !phrase && isASCIIWordEdge(first) {
 		b.WriteString(`\b`)
 	}
 	b.WriteString(regexp.QuoteMeta(kw))
-	if !phrase && last != utf8.RuneError && isWordRune(last) {
+	if !phrase && isASCIIWordEdge(last) {
 		b.WriteString(`\b`)
 	}
 

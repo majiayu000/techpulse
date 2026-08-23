@@ -181,7 +181,24 @@ func (c *Client) GetBody(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	return io.ReadAll(resp.Body)
+	return ReadLimited(resp.Body)
+}
+
+// MaxBodyBytes bounds how much of a remote response body is read into
+// memory; hostile or misconfigured servers can return unbounded bodies.
+const MaxBodyBytes = 20 << 20 // 20 MB
+
+// ReadLimited reads r fully but fails with an error when the payload
+// exceeds MaxBodyBytes, instead of exhausting memory.
+func ReadLimited(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, MaxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxBodyBytes {
+		return nil, fmt.Errorf("response body exceeds %d bytes", MaxBodyBytes)
+	}
+	return data, nil
 }
 
 // isRetryableError reports whether err should trigger another request attempt.

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -144,7 +143,7 @@ func (c *Collector) fetchFeed(ctx context.Context, source Source, opts collector
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := httpclient.ReadLimited(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read feed body: %w", err)
 	}

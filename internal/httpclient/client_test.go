@@ -450,3 +450,27 @@ func TestRetryAfterOverridesBackoff(t *testing.T) {
 		t.Errorf("elapsed = %v, want < 10s (Retry-After must be capped at MaxDelay)", elapsed)
 	}
 }
+
+func TestGetBody_RejectsOversizedResponse(t *testing.T) {
+	big := bytes.Repeat([]byte("a"), MaxBodyBytes+1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(big)
+	}))
+	defer server.Close()
+
+	c := New()
+	_, err := c.GetBody(context.Background(), server.URL)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected size-limit error, got %v", err)
+	}
+}
+
+func TestReadLimited(t *testing.T) {
+	if data, err := ReadLimited(strings.NewReader("hello")); err != nil || string(data) != "hello" {
+		t.Fatalf("ReadLimited small payload = %q, %v", data, err)
+	}
+	_, err := ReadLimited(bytes.NewReader(make([]byte, MaxBodyBytes+1)))
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected size-limit error, got %v", err)
+	}
+}

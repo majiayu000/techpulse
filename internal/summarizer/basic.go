@@ -139,13 +139,13 @@ func (s *BasicSummarizer) generateMarkdown(date string, articles []EnrichedArtic
 		if i >= 10 {
 			break
 		}
-		md += fmt.Sprintf("### %d. [%s](%s)\n", i+1, a.Title, a.URL)
+		md += fmt.Sprintf("### %d. %s\n", i+1, MarkdownLink(a.Title, a.URL))
 		md += s.formatArticleMeta(a)
 		if len(a.MatchedKeywords) > 0 {
 			md += fmt.Sprintf("- Keywords: %v\n", a.MatchedKeywords)
 		}
 		if a.Summary != "" {
-			md += fmt.Sprintf("\n> %s\n", a.Summary)
+			md += fmt.Sprintf("\n> %s\n", SanitizeMarkdownText(a.Summary))
 		}
 		md += "\n"
 	}

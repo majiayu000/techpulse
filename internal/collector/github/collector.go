@@ -3,12 +3,12 @@ package github
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/httpclient"
 )
 
 const defaultBaseURL = "https://github.com"
@@ -118,7 +118,7 @@ func (c *Collector) fetchTrendingPage(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpclient.ReadLimited(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read response: %w", err)
 	}

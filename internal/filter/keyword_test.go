@@ -315,3 +315,22 @@ func TestDefaultKeywords_ContainsNegativeFilters(t *testing.T) {
 		}
 	}
 }
+
+func TestKeywordFilter_MatchCJKInclude(t *testing.T) {
+	// Regression: Go's \b is an ASCII-only boundary, so anchoring
+	// non-ASCII keywords used to make them unmatchable, silently dropping
+	// every article when the include list held only CJK terms.
+	include := []string{"人工智能", "机器学习"}
+	f := NewKeywordFilter(include, nil)
+
+	articles := []collector.Article{
+		createTestArticle("1", "华为发布人工智能芯片", ""),
+		createTestArticle("2", "机器学习入门教程", ""),
+		createTestArticle("3", "How to cook pasta", ""),
+	}
+
+	result := f.Apply(articles)
+	if len(result) != 2 {
+		t.Errorf("expected 2 matched CJK articles, got %d", len(result))
+	}
+}

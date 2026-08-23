@@ -136,7 +136,11 @@ func runDaemon(ctx context.Context, cfg techpulse.Config) {
 	}
 	d := techpulse.NewDaemon(cfg, daemonCfg)
 	d.SetLogger(log)
-	d.Run(ctx)
+	if _, err := d.Run(ctx); err != nil &&
+		!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
 }
 
 // createConfigProvider returns a provider that re-reads the config file before
