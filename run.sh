@@ -13,8 +13,17 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# 编译(源码比二进制新时)
-if [ ! -f ./techpulse ] || [ -n "$(find cmd internal -name '*.go' -newer ./techpulse -print -quit 2>/dev/null)" ]; then
+# 编译(源码或模块图比二进制新时)
+needs_rebuild=0
+if [ ! -f ./techpulse ]; then
+    needs_rebuild=1
+elif [ -n "$(find cmd internal -name '*.go' -newer ./techpulse -print -quit 2>/dev/null)" ]; then
+    needs_rebuild=1
+elif [ go.mod -nt ./techpulse ] || [ go.sum -nt ./techpulse ]; then
+    needs_rebuild=1
+fi
+
+if [ "$needs_rebuild" -eq 1 ]; then
     echo "编译中..."
     go build -o techpulse ./cmd/techpulse/ || exit 1
 fi

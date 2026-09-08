@@ -46,6 +46,13 @@ func NewWithBaseURL(baseURL string, subreddits []Subreddit) *Collector {
 	}
 }
 
+// SetHTTPTimeout sets the per-request timeout on the underlying HTTP client.
+func (c *Collector) SetHTTPTimeout(d time.Duration) {
+	if d > 0 {
+		c.httpClient.Timeout = d
+	}
+}
+
 // Name returns the collector's unique name.
 func (c *Collector) Name() string {
 	return "reddit"

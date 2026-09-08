@@ -22,6 +22,7 @@ func TestSanitizeMarkdownText(t *testing.T) {
 		// bracket escaping applies after control-char stripping
 		{"other control chars stripped", "a\x00\x1b[31mb", "a\\[31mb"},
 		{"brackets escaped", "see [this] link", "see \\[this\\] link"},
+		{"backslash before bracket escaped first", `Read this\](https://attacker.example)`, `Read this\\\](https://attacker.example)`},
 		{"DEL stripped", "a\x7fb", "ab"},
 	}
 	for _, tt := range tests {
@@ -65,6 +66,15 @@ func TestSafeLinkURL(t *testing.T) {
 func TestMarkdownLink(t *testing.T) {
 	if got := MarkdownLink("A [nice] title", "https://example.com/x"); got != "[A \\[nice\\] title](https://example.com/x)" {
 		t.Errorf("MarkdownLink safe case = %q", got)
+	}
+	// A remote title that tries to close link text via a pre-escaped bracket
+	// must not become the rendered destination.
+	gotBreakout := MarkdownLink(`Read this\](https://attacker.example)`, "https://legitimate.example/a")
+	if strings.Contains(gotBreakout, "](https://attacker.example)") && !strings.Contains(gotBreakout, `\\\]`) {
+		t.Errorf("backslash breakout still active: %q", gotBreakout)
+	}
+	if !strings.HasPrefix(gotBreakout, "[") || !strings.Contains(gotBreakout, "](https://legitimate.example/a)") {
+		t.Errorf("expected legitimate URL to remain the link destination, got %q", gotBreakout)
 	}
 	got := MarkdownLink("evil\n## injected", "javascript:alert(1)")
 	if strings.Contains(got, "javascript:") || strings.Contains(got, "\n") {

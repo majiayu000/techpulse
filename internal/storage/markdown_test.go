@@ -275,8 +275,8 @@ func TestWriteFileAtomicCreatesAndReplaces(t *testing.T) {
 		t.Errorf("expected 'version-1', got '%s'", got)
 	}
 
-	// Replacing an existing file publishes the complete new content with the
-	// requested permissions.
+	// Replacing an existing file publishes the complete new content while
+	// preserving the destination's existing permissions.
 	if err := os.Chmod(path, 0600); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -293,12 +293,48 @@ func TestWriteFileAtomicCreatesAndReplaces(t *testing.T) {
 	}
 	if fi, err := os.Stat(path); err != nil {
 		t.Fatalf("stat: %v", err)
-	} else if fi.Mode().Perm() != 0644 {
-		t.Errorf("expected perm 0644, got %v", fi.Mode().Perm())
+	} else if fi.Mode().Perm() != 0600 {
+		t.Errorf("expected preserved perm 0600, got %v", fi.Mode().Perm())
 	}
 
 	if residue := tempResidue(t, dir); len(residue) > 0 {
 		t.Errorf("temp files left behind after success: %v", residue)
+	}
+}
+
+func TestWriteFileAtomicPreservesSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real-digest.md")
+	link := filepath.Join(dir, "DIGEST.md")
+	if err := os.WriteFile(target, []byte("old"), 0600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if err := writeFileAtomic(link, []byte("new-content"), 0644); err != nil {
+		t.Fatalf("writeFileAtomic through symlink: %v", err)
+	}
+
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("lstat link: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("symlink directory entry was replaced by a regular file")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if string(got) != "new-content" {
+		t.Errorf("target content = %q, want new-content", got)
+	}
+	if fi, err := os.Stat(target); err != nil {
+		t.Fatalf("stat target: %v", err)
+	} else if fi.Mode().Perm() != 0600 {
+		t.Errorf("target perm = %v, want preserved 0600", fi.Mode().Perm())
 	}
 }
 

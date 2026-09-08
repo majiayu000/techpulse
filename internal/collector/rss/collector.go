@@ -22,10 +22,12 @@ type Collector struct {
 }
 
 // New creates a new RSS collector with the specified sources.
-func New(sources []Source) *Collector {
+// Optional httpclient options configure the underlying request client
+// (for example per-request timeout).
+func New(sources []Source, opts ...httpclient.Option) *Collector {
 	return &Collector{
 		sources:    sources,
-		httpClient: httpclient.New(),
+		httpClient: httpclient.New(opts...),
 		// logger defaults to nil: per-feed failure warnings go through the
 		// package default logger so --quiet / logger.SetDefault are honored.
 		// Use WithLogger to override.
@@ -40,8 +42,8 @@ func (c *Collector) WithLogger(l logger.Logger) *Collector {
 }
 
 // NewWithDefaults creates an RSS collector with default sources.
-func NewWithDefaults() *Collector {
-	return New(DefaultSources)
+func NewWithDefaults(opts ...httpclient.Option) *Collector {
+	return New(DefaultSources, opts...)
 }
 
 // Name returns the collector's unique name.

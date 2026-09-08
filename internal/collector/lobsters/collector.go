@@ -45,6 +45,13 @@ func NewWithBaseURL(baseURL string) *Collector {
 	}
 }
 
+// SetHTTPTimeout sets the per-request timeout on the underlying HTTP client.
+func (c *Collector) SetHTTPTimeout(d time.Duration) {
+	if d > 0 {
+		c.httpClient.Timeout = d
+	}
+}
+
 // Name returns the collector's unique name.
 func (c *Collector) Name() string {
 	if len(c.tags) > 0 {

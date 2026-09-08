@@ -21,7 +21,8 @@ type Config struct {
 	Limit         int             // Maximum articles per source
 	Sources       []string        // Specific sources to use (empty = all)
 	Output        string          // Custom output directory
-	Timeout       int             // Request timeout in seconds
+	Timeout       int             // Per-request HTTP timeout in seconds
+	RetentionDays int             // Archive retention in days; 0 disables cleanup
 	Keywords      *KeywordsConfig // Custom keyword filters
 	RSSFeeds      []RSSFeedConfig // Custom RSS feeds
 	EnableSummary bool            // Enable content summary extraction
@@ -30,10 +31,11 @@ type Config struct {
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
-		Limit:   30,
-		Sources: nil,
-		Output:  ".techpulse",
-		Timeout: 60,
+		Limit:         30,
+		Sources:       nil,
+		Output:        ".techpulse",
+		Timeout:       60,
+		RetentionDays: storage.DefaultConfig().RetentionDays,
 	}
 }
 
@@ -69,6 +71,10 @@ func NewWithOptions(cfg Config) *TechPulse {
 	if cfg.Output != "" {
 		storeCfg.BaseDir = cfg.Output
 	}
+	// Always honor the runtime retention setting (including explicit 0 to
+	// disable cleanup). DefaultConfig already seeds RetentionDays from
+	// storage.DefaultConfig, so an unset path keeps the documented default.
+	storeCfg.RetentionDays = cfg.RetentionDays
 
 	return &TechPulse{
 		config:     cfg,
@@ -132,9 +138,11 @@ func (tp *TechPulse) SetShowProgress(show bool) {
 // Run executes the full collection pipeline.
 func (tp *TechPulse) Run(ctx context.Context) error {
 	tp.log.Info("TechPulse starting...")
+	// Timeout is applied per HTTP request on each collector's client, not as
+	// a whole-collection deadline (multi-request sources would otherwise be
+	// cut off by cumulative duration).
 	opts := collector.Options{
-		Limit:   tp.config.Limit,
-		Timeout: timeoutDuration(tp.config.Timeout),
+		Limit: tp.config.Limit,
 	}
 	results := tp.collectFromSources(ctx, opts)
 	allArticles := tp.combineResults(results)

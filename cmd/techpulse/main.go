@@ -36,12 +36,13 @@ var cliOpts cliFlags
 // cliFlags holds Config-affecting flag values plus the set of flags that were
 // explicitly present in argv.
 type cliFlags struct {
-	limit   int
-	output  string
-	timeout int
-	sources string
-	summary bool
-	set     map[string]bool // flag names explicitly passed by the user
+	limit         int
+	output        string
+	timeout       int
+	retentionDays int
+	sources       string
+	summary       bool
+	set           map[string]bool // flag names explicitly passed by the user
 }
 
 // applyTo layers explicitly-passed CLI flags over cfg.
@@ -63,7 +64,12 @@ func (f cliFlags) applyTo(cfg techpulse.Config) techpulse.Config {
 	if f.set["timeout"] {
 		cfg.Timeout = f.timeout
 	}
-	if f.set["sources"] && strings.TrimSpace(f.sources) != "" {
+	if f.set["retention-days"] {
+		cfg.RetentionDays = f.retentionDays
+	}
+	if f.set["sources"] {
+		// Explicit --sources= (empty) clears a file-configured subset and
+		// restores empty-means-all behavior.
 		cfg.Sources = splitSources(f.sources)
 	}
 	if f.set["summary"] {
@@ -192,7 +198,8 @@ func parseFlags(args []string) (*techpulse.Config, error) {
 	fs.IntVar(&opts.limit, "limit", defaults.Limit, "Maximum articles per source")
 	fs.StringVar(&opts.sources, "sources", "", "Comma-separated sources (available: "+availableSourcesHelp()+")")
 	fs.StringVar(&opts.output, "output", defaults.Output, "Output directory for reports")
-	fs.IntVar(&opts.timeout, "timeout", defaults.Timeout, "Request timeout in seconds")
+	fs.IntVar(&opts.timeout, "timeout", defaults.Timeout, "Per-request HTTP timeout in seconds")
+	fs.IntVar(&opts.retentionDays, "retention-days", defaults.RetentionDays, "Archive retention days (0 disables cleanup)")
 	fs.BoolVar(&listSources, "list-sources", false, "List available data sources")
 	fs.StringVar(&configPath, "config", "", "Path to config file (default: auto-detect)")
 	fs.BoolVar(&genConfig, "gen-config", false, "Generate example config file (honors --config path)")
@@ -227,6 +234,9 @@ func parseFlags(args []string) (*techpulse.Config, error) {
 	var err error
 	if interval, err = time.ParseDuration(intervalStr); err != nil {
 		return nil, fmt.Errorf("invalid interval %q: %w", intervalStr, err)
+	}
+	if interval <= 0 {
+		return nil, fmt.Errorf("invalid interval %q: must be positive", intervalStr)
 	}
 
 	if genConfig {

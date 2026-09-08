@@ -42,13 +42,14 @@ func writeConfig(t *testing.T, yaml string) string {
 // flags explicitly passed on the command line may override file values.
 func TestParseFlagsCLIPassedFlagsBeatFileConfig(t *testing.T) {
 	tests := []struct {
-		name        string
-		configYAML  string
-		args        []string
-		wantLimit   int
-		wantTimeout int
-		wantSummary bool
-		wantSources []string
+		name          string
+		configYAML    string
+		args          []string
+		wantLimit     int
+		wantTimeout   int
+		wantSummary   bool
+		wantSources   []string
+		wantRetention *int
 	}{
 		{
 			name:        "file enable_summary=true survives default --summary=false",
@@ -95,6 +96,29 @@ func TestParseFlagsCLIPassedFlagsBeatFileConfig(t *testing.T) {
 			wantTimeout: 60,
 			wantSources: []string{"rss", "reddit"},
 		},
+		{
+			name:        "explicit empty --sources clears file sources",
+			configYAML:  "sources:\n  - hackernews_top",
+			args:        []string{"--sources="},
+			wantLimit:   30,
+			wantTimeout: 60,
+			wantSources: []string{},
+		},
+		{
+			name:          "file retention_days=0 disables cleanup",
+			configYAML:    "retention_days: 0\n",
+			wantLimit:     30,
+			wantTimeout:   60,
+			wantRetention: intPtr(0),
+		},
+		{
+			name:          "explicit --retention-days beats file",
+			configYAML:    "retention_days: 7\n",
+			args:          []string{"--retention-days", "0"},
+			wantLimit:     30,
+			wantTimeout:   60,
+			wantRetention: intPtr(0),
+		},
 	}
 
 	for _, tt := range tests {
@@ -117,12 +141,17 @@ func TestParseFlagsCLIPassedFlagsBeatFileConfig(t *testing.T) {
 			if cfg.EnableSummary != tt.wantSummary {
 				t.Errorf("EnableSummary = %v, want %v", cfg.EnableSummary, tt.wantSummary)
 			}
-			if len(tt.wantSources) > 0 && !slices.Equal(cfg.Sources, tt.wantSources) {
+			if tt.wantSources != nil && !slices.Equal(cfg.Sources, tt.wantSources) {
 				t.Errorf("Sources = %v, want %v", cfg.Sources, tt.wantSources)
+			}
+			if tt.wantRetention != nil && cfg.RetentionDays != *tt.wantRetention {
+				t.Errorf("RetentionDays = %d, want %d", cfg.RetentionDays, *tt.wantRetention)
 			}
 		})
 	}
 }
+
+func intPtr(v int) *int { return &v }
 
 // TestParseFlagsValidateIsHonest ensures --validate reports failure when the
 // config file cannot be loaded/parsed or violates constraints, instead of
@@ -215,6 +244,16 @@ func TestParseFlagsRejections(t *testing.T) {
 			name:            "invalid interval rejected",
 			args:            []string{"--interval", "not-a-duration"},
 			wantErrContains: "invalid interval",
+		},
+		{
+			name:            "non-positive interval rejected",
+			args:            []string{"--daemon", "--interval", "0s"},
+			wantErrContains: "must be positive",
+		},
+		{
+			name:            "negative interval rejected",
+			args:            []string{"--interval", "-1h"},
+			wantErrContains: "must be positive",
 		},
 		{
 			name:            "invalid source via flag rejected",

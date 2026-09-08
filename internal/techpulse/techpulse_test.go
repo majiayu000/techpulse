@@ -25,6 +25,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Timeout != 60 {
 		t.Errorf("Timeout = %d, want 60", cfg.Timeout)
 	}
+	if cfg.RetentionDays != 30 {
+		t.Errorf("RetentionDays = %d, want 30", cfg.RetentionDays)
+	}
 }
 
 func TestTimeoutDuration(t *testing.T) {
@@ -59,10 +62,11 @@ func TestNew(t *testing.T) {
 
 func TestNewWithOptions(t *testing.T) {
 	cfg := Config{
-		Limit:   10,
-		Sources: []string{"hackernews_top"},
-		Output:  "/tmp/test",
-		Timeout: 30,
+		Limit:         10,
+		Sources:       []string{"hackernews_top"},
+		Output:        "/tmp/test",
+		Timeout:       30,
+		RetentionDays: 0,
 	}
 	tp := NewWithOptions(cfg)
 	if tp.config.Limit != 10 {
@@ -70,6 +74,9 @@ func TestNewWithOptions(t *testing.T) {
 	}
 	if tp.storeCfg.BaseDir != "/tmp/test" {
 		t.Errorf("storeCfg.BaseDir = %q, want /tmp/test", tp.storeCfg.BaseDir)
+	}
+	if tp.storeCfg.RetentionDays != 0 {
+		t.Errorf("storeCfg.RetentionDays = %d, want 0 (opt-out)", tp.storeCfg.RetentionDays)
 	}
 }
 

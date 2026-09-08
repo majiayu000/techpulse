@@ -18,9 +18,9 @@ type Client struct {
 }
 
 // NewClient creates a new HN API client with retry support.
-func NewClient() *Client {
+func NewClient(opts ...httpclient.Option) *Client {
 	return &Client{
-		httpClient: httpclient.New(),
+		httpClient: httpclient.New(opts...),
 		baseURL:    defaultBaseURL,
 	}
 }

@@ -99,6 +99,9 @@ output: .techpulse
 # Request timeout in seconds
 timeout: 60
 
+# Archive retention in days (default: 30). Set to 0 to disable cleanup.
+# retention_days: 30
+
 # Sources to use (optional, uses all if empty)
 # sources:
 #   - hackernews_top

@@ -6,10 +6,10 @@ import (
 )
 
 // sanitizeTextReplacer strips nothing by itself; text sanitization drops
-// control characters and escapes square brackets so remote-controlled
-// strings cannot forge Markdown structure (headings via newlines, link
-// breakouts via brackets).
-var bracketEscaper = strings.NewReplacer("[", "\\[", "]", "\\]")
+// control characters and escapes backslashes then square brackets so
+// remote-controlled strings cannot forge Markdown structure (headings via
+// newlines, link breakouts via brackets or pre-escaped closing brackets).
+var bracketEscaper = strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]")
 
 // SanitizeMarkdownText makes a remote-controlled string safe to embed in
 // generated Markdown: control characters (including newlines that could

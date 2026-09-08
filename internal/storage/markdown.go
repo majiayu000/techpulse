@@ -77,13 +77,28 @@ func (s *MarkdownStorage) SaveReport(report summarizer.Report) error {
 }
 
 // writeFileAtomic writes data to path atomically. It writes to a temporary
-// file in the same directory (same filesystem, so the rename below cannot
-// fall back to a copy), flushes it to stable storage, then renames it over
-// path. Readers therefore see either the complete previous content or the
-// complete new content - never a torn write. On any error, path is left
-// untouched and the temporary file is cleaned up.
+// file in the same directory as the final destination (same filesystem, so
+// the rename below cannot fall back to a copy), flushes it to stable
+// storage, then renames it over the destination. Readers therefore see
+// either the complete previous content or the complete new content - never
+// a torn write. On any error, the destination is left untouched and the
+// temporary file is cleaned up.
+//
+// Symlinks at path are preserved: the write resolves to the target and
+// replaces that file, matching os.WriteFile behavior. Permissions follow
+// the previous destination mode when it exists; for new files, OpenFile
+// applies the process umask to perm so restrictive umasks are honored.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	dir, base := filepath.Dir(path), filepath.Base(path)
+	dest, err := resolveWritePath(path)
+	if err != nil {
+		return err
+	}
+	dir, base := filepath.Dir(dest), filepath.Base(dest)
+
+	mode := perm
+	if fi, err := os.Stat(dest); err == nil {
+		mode = fi.Mode().Perm()
+	}
 
 	tmp, err := os.CreateTemp(dir, "."+base+".tmp-*")
 	if err != nil {
@@ -105,15 +120,74 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
-	// CreateTemp creates files with 0600; restore the requested permissions
-	// before publishing under the final name.
-	if err := os.Chmod(tmpName, perm); err != nil {
-		return fmt.Errorf("chmod temp file: %w", err)
+
+	// CreateTemp uses 0600. For an existing destination, restore its mode.
+	// For a new file, re-create the mode through OpenFile semantics by
+	// chmod'ing to the umask-adjusted value of the requested perm.
+	if _, err := os.Stat(dest); err == nil {
+		if err := os.Chmod(tmpName, mode); err != nil {
+			return fmt.Errorf("chmod temp file: %w", err)
+		}
+	} else {
+		if err := chmodWithUmask(tmpName, perm); err != nil {
+			return err
+		}
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+
+	if err := os.Rename(tmpName, dest); err != nil {
 		return fmt.Errorf("replace %s: %w", base, err)
 	}
 
+	return nil
+}
+
+// resolveWritePath returns the filesystem path that should receive an
+// atomic replace. Regular files and missing paths are returned as-is; a
+// symlink is resolved so the write updates the target and leaves the
+// symlink directory entry intact.
+func resolveWritePath(path string) (string, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, nil
+		}
+		return "", fmt.Errorf("stat %s: %w", path, err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink %s: %w", path, err)
+	}
+	return resolved, nil
+}
+
+// chmodWithUmask sets path's mode to perm after applying the process umask,
+// matching os.OpenFile / os.WriteFile creation behavior for new files.
+func chmodWithUmask(path string, perm os.FileMode) error {
+	probe, err := os.CreateTemp(filepath.Dir(path), ".perm-probe-*")
+	if err != nil {
+		return fmt.Errorf("create perm probe: %w", err)
+	}
+	probeName := probe.Name()
+	probe.Close()
+	defer os.Remove(probeName)
+
+	// Recreate with the requested permission bits so the kernel applies umask.
+	os.Remove(probeName)
+	f, err := os.OpenFile(probeName, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return fmt.Errorf("create perm probe: %w", err)
+	}
+	fi, err := f.Stat()
+	f.Close()
+	if err != nil {
+		return fmt.Errorf("stat perm probe: %w", err)
+	}
+	if err := os.Chmod(path, fi.Mode().Perm()); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
 	return nil
 }
 

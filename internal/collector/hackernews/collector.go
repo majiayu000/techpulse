@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/httpclient"
 )
 
 // Collector collects articles from Hacker News.
@@ -15,9 +16,11 @@ type Collector struct {
 }
 
 // New creates a new HN collector for the specified category.
-func New(category string) *Collector {
+// Optional httpclient options configure the underlying request client
+// (for example per-request timeout).
+func New(category string, opts ...httpclient.Option) *Collector {
 	return &Collector{
-		client:   NewClient(),
+		client:   NewClient(opts...),
 		category: category,
 	}
 }

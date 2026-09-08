@@ -16,6 +16,7 @@ type FileConfig struct {
 	Limit         int             `yaml:"limit"`
 	Output        string          `yaml:"output"`
 	Timeout       int             `yaml:"timeout"`
+	RetentionDays *int            `yaml:"retention_days"` // Pointer so 0 (disable) is distinct from unset
 	Sources       []string        `yaml:"sources"`
 	Keywords      KeywordsConfig  `yaml:"keywords"`
 	RSSFeeds      []RSSFeedConfig `yaml:"rss_feeds"`
@@ -98,6 +99,9 @@ func MergeWithConfig(base Config, file *FileConfig) Config {
 	if file.Timeout > 0 && base.Timeout == DefaultConfig().Timeout {
 		result.Timeout = file.Timeout
 	}
+	if file.RetentionDays != nil {
+		result.RetentionDays = *file.RetentionDays
+	}
 	if len(file.Sources) > 0 && len(base.Sources) == 0 {
 		result.Sources = file.Sources
 	}
@@ -138,8 +142,11 @@ limit: 30
 # Output directory for reports (default: .techpulse)
 output: .techpulse
 
-# Request timeout in seconds (default: 60)
+# Request timeout in seconds (default: 60). Applied per HTTP request.
 timeout: 60
+
+# Archive retention in days (default: 30). Set to 0 to disable cleanup.
+# retention_days: 30
 
 # Specify which sources to use (optional, uses all if empty)
 # Available: %s
