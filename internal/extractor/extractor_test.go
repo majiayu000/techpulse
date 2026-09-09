@@ -63,7 +63,7 @@ func TestExtract_FetchRemote(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := httpclient.New()
+	client := httpclient.New(httpclient.WithAllowPrivateHosts(true))
 	ext := NewDefault(client)
 
 	summary, err := ext.Extract(context.Background(), server.URL, "")

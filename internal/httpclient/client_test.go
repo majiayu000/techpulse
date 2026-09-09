@@ -48,6 +48,11 @@ func TestNewWithOptions(t *testing.T) {
 	}
 }
 
+func testClient(opts ...Option) *Client {
+	base := []Option{WithAllowPrivateHosts(true)}
+	return New(append(base, opts...)...)
+}
+
 func TestGet(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -56,7 +61,7 @@ func TestGet(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New()
+	c := testClient()
 	resp, err := c.Get(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -74,7 +79,7 @@ func TestGetBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New()
+	c := testClient()
 	body, err := c.GetBody(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -99,7 +104,7 @@ func TestRetryOnServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:        3,
 		InitialDelay:      10 * time.Millisecond,
 		MaxDelay:          50 * time.Millisecond,
@@ -130,7 +135,7 @@ func TestNoRetryOnNonRetryableStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:        3,
 		InitialDelay:      10 * time.Millisecond,
 		MaxDelay:          50 * time.Millisecond,
@@ -157,7 +162,7 @@ func TestMaxRetriesExceeded(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:        2,
 		InitialDelay:      10 * time.Millisecond,
 		MaxDelay:          50 * time.Millisecond,
@@ -183,7 +188,7 @@ func TestContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New()
+	c := testClient()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
@@ -203,7 +208,7 @@ func TestUserAgentHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithUserAgent("CustomAgent/2.0"))
+	c := testClient(WithUserAgent("CustomAgent/2.0"))
 	resp, err := c.Get(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

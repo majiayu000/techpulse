@@ -12,6 +12,7 @@ import (
 	"github.com/anthropic/autonomous-runner/internal/collector/hackernews"
 	"github.com/anthropic/autonomous-runner/internal/collector/rss"
 	"github.com/anthropic/autonomous-runner/internal/filter"
+	"github.com/anthropic/autonomous-runner/internal/httpclient"
 	"github.com/anthropic/autonomous-runner/internal/logger"
 	"github.com/anthropic/autonomous-runner/internal/storage"
 	"github.com/anthropic/autonomous-runner/internal/summarizer"
@@ -34,7 +35,7 @@ func TestIntegrationFullPipeline(t *testing.T) {
 	reg := collector.NewRegistry()
 	hnClient := hackernews.NewClientWithBaseURL(hnServer.URL)
 	reg.Register(hackernews.NewWithClient("top", hnClient))
-	reg.Register(rss.New([]rss.Source{{Name: "Test", URL: rssServer.URL}}))
+	reg.Register(rss.New([]rss.Source{{Name: "Test", URL: rssServer.URL}}, httpclient.WithAllowPrivateHosts(true)))
 
 	storeCfg := storage.DefaultConfig()
 	storeCfg.BaseDir = tmpDir
@@ -119,7 +120,7 @@ func TestIntegrationSpecificSources(t *testing.T) {
 	reg := collector.NewRegistry()
 	hnClient := hackernews.NewClientWithBaseURL(hnServer.URL)
 	reg.Register(hackernews.NewWithClient("top", hnClient))
-	reg.Register(rss.New([]rss.Source{{Name: "Test", URL: rssServer.URL}}))
+	reg.Register(rss.New([]rss.Source{{Name: "Test", URL: rssServer.URL}}, httpclient.WithAllowPrivateHosts(true)))
 
 	storeCfg := storage.DefaultConfig()
 	storeCfg.BaseDir = tmpDir

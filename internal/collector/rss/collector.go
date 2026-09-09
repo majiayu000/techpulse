@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -19,10 +20,12 @@ type Collector struct {
 }
 
 // New creates a new RSS collector with the specified sources.
-func New(sources []Source) *Collector {
+// Optional httpclient.Option values configure the shared HTTP client
+// (SSRF protections remain on unless WithAllowPrivateHosts is set).
+func New(sources []Source, opts ...httpclient.Option) *Collector {
 	return &Collector{
 		sources:    sources,
-		httpClient: httpclient.New(),
+		httpClient: httpclient.New(opts...),
 	}
 }
 
@@ -77,7 +80,8 @@ func (c *Collector) fetchFeed(ctx context.Context, source Source, opts collector
 	}
 
 	var feed Feed
-	if err := xml.NewDecoder(resp.Body).Decode(&feed); err != nil {
+	limited := io.LimitReader(resp.Body, httpclient.DefaultMaxResponseBytes)
+	if err := xml.NewDecoder(limited).Decode(&feed); err != nil {
 		return nil, fmt.Errorf("decode RSS: %w", err)
 	}
 

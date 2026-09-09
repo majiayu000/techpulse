@@ -28,8 +28,11 @@ func NewClient() *Client {
 // NewClientWithBaseURL creates a client with a custom base URL (for testing).
 func NewClientWithBaseURL(baseURL string) *Client {
 	return &Client{
-		httpClient: httpclient.New(httpclient.WithRetryConfig(httpclient.NoRetryConfig())),
-		baseURL:    baseURL,
+		httpClient: httpclient.New(
+			httpclient.WithRetryConfig(httpclient.NoRetryConfig()),
+			httpclient.WithAllowPrivateHosts(true),
+		),
+		baseURL: baseURL,
 	}
 }
 
