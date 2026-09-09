@@ -110,34 +110,35 @@ func TestRegistryAll(t *testing.T) {
 		t.Errorf("expected 0 collectors, got %d", len(all))
 	}
 
-	// With collectors
+	// With collectors — register out of name order to prove sorting.
+	r.Register(&mockCollector{name: "c3"})
 	r.Register(&mockCollector{name: "c1"})
 	r.Register(&mockCollector{name: "c2"})
-	r.Register(&mockCollector{name: "c3"})
 
 	all = r.All()
 	if len(all) != 3 {
 		t.Errorf("expected 3 collectors, got %d", len(all))
+	}
+	want := []string{"c1", "c2", "c3"}
+	for i, c := range all {
+		if c.Name() != want[i] {
+			t.Errorf("All()[%d] = %q, want %q (stable name order)", i, c.Name(), want[i])
+		}
 	}
 }
 
 func TestRegistryNames(t *testing.T) {
 	r := NewRegistry()
 
-	r.Register(&mockCollector{name: "alpha"})
 	r.Register(&mockCollector{name: "beta"})
+	r.Register(&mockCollector{name: "alpha"})
 
 	names := r.Names()
 	if len(names) != 2 {
 		t.Errorf("expected 2 names, got %d", len(names))
 	}
-
-	nameSet := make(map[string]bool)
-	for _, n := range names {
-		nameSet[n] = true
-	}
-	if !nameSet["alpha"] || !nameSet["beta"] {
-		t.Errorf("expected names alpha and beta, got %v", names)
+	if names[0] != "alpha" || names[1] != "beta" {
+		t.Errorf("expected sorted names [alpha beta], got %v", names)
 	}
 }
 

@@ -145,22 +145,34 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 // atomic replace. Regular files and missing paths are returned as-is; a
 // symlink is resolved so the write updates the target and leaves the
 // symlink directory entry intact.
+//
+// Unlike filepath.EvalSymlinks, a dangling final target is still resolved:
+// the write creates that target (matching os.WriteFile / open(O_CREAT)).
 func resolveWritePath(path string) (string, error) {
-	fi, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return path, nil
+	const maxSymlinkDepth = 255
+	current := path
+	for i := 0; i < maxSymlinkDepth; i++ {
+		fi, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Missing path or dangling symlink target: create here.
+				return current, nil
+			}
+			return "", fmt.Errorf("stat %s: %w", current, err)
 		}
-		return "", fmt.Errorf("stat %s: %w", path, err)
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return current, nil
+		}
+		link, err := os.Readlink(current)
+		if err != nil {
+			return "", fmt.Errorf("read symlink %s: %w", current, err)
+		}
+		if !filepath.IsAbs(link) {
+			link = filepath.Join(filepath.Dir(current), link)
+		}
+		current = filepath.Clean(link)
 	}
-	if fi.Mode()&os.ModeSymlink == 0 {
-		return path, nil
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", fmt.Errorf("resolve symlink %s: %w", path, err)
-	}
-	return resolved, nil
+	return "", fmt.Errorf("resolve symlink %s: too many levels", path)
 }
 
 // chmodWithUmask sets path's mode to perm after applying the process umask,

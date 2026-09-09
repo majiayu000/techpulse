@@ -27,20 +27,20 @@ build:
 build-release:
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) ./cmd/techpulse
 
-# Run all tests
+# Run all tests (including cmd/techpulse CLI tests)
 test:
-	$(GOTEST) -v ./internal/...
+	$(GOTEST) -v ./...
 
 # Run tests with coverage summary
 test-cover:
 	@echo "Running tests with coverage..."
-	@$(GOTEST) -cover ./internal/... | tee /dev/stderr | \
+	@$(GOTEST) -cover ./... | tee /dev/stderr | \
 		awk '/^ok/ {total += $$5; count++} END {if(count>0) printf "\n=== Average Coverage: %.1f%% ===\n", total/count}'
 
 # Generate detailed coverage report
 test-cover-report:
 	@echo "Generating coverage report..."
-	$(GOTEST) -coverprofile=$(COVER_FILE) ./internal/...
+	$(GOTEST) -coverprofile=$(COVER_FILE) ./...
 	@echo "\n=== Coverage Summary ==="
 	@$(GOCMD) tool cover -func=$(COVER_FILE) | tail -1
 	@echo ""

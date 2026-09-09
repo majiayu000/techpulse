@@ -338,6 +338,35 @@ func TestWriteFileAtomicPreservesSymlinkTarget(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomicCreatesThroughDanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real-digest.md") // not created yet
+	link := filepath.Join(dir, "DIGEST.md")
+	// Relative link, matching common publish layouts.
+	if err := os.Symlink("real-digest.md", link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if err := writeFileAtomic(link, []byte("created-via-link"), 0644); err != nil {
+		t.Fatalf("writeFileAtomic through dangling symlink: %v", err)
+	}
+
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("lstat link: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("symlink directory entry was replaced by a regular file")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read created target: %v", err)
+	}
+	if string(got) != "created-via-link" {
+		t.Errorf("target content = %q, want created-via-link", got)
+	}
+}
+
 func TestSaveReportFailurePreservesDigest(t *testing.T) {
 	goodContent := "# Good Digest\n\nPrevious good digest."
 
