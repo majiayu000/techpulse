@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/anthropic/autonomous-runner/internal/collector/rss"
 )
 
 func TestLoadConfigFile(t *testing.T) {
@@ -162,14 +164,46 @@ func TestBuildRSSCollector(t *testing.T) {
 	if c == nil {
 		t.Error("buildRSSCollector returned nil")
 	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("default collector Validate() error: %v", err)
+	}
 
-	// Custom feeds
+	// Custom feeds append to defaults (not replace)
 	custom := []RSSFeedConfig{
 		{Name: "Test", URL: "https://test.com/feed"},
 	}
 	c = buildRSSCollector(custom)
 	if c == nil {
 		t.Error("buildRSSCollector with custom feeds returned nil")
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("custom collector Validate() error: %v", err)
+	}
+
+	merged := mergeRSSSources(custom)
+	wantLen := len(rss.DefaultSources) + 1
+	if len(merged) != wantLen {
+		t.Fatalf("mergeRSSSources len = %d, want %d", len(merged), wantLen)
+	}
+	for i, def := range rss.DefaultSources {
+		if merged[i].Name != def.Name || merged[i].URL != def.URL {
+			t.Errorf("merged[%d] = %+v, want default %+v", i, merged[i], def)
+		}
+	}
+	last := merged[len(merged)-1]
+	if last.Name != "Test" || last.URL != "https://test.com/feed" {
+		t.Errorf("custom feed not appended: got %+v", last)
+	}
+}
+
+func TestMergeRSSSourcesEmpty(t *testing.T) {
+	merged := mergeRSSSources(nil)
+	if len(merged) != len(rss.DefaultSources) {
+		t.Fatalf("mergeRSSSources(nil) len = %d, want %d", len(merged), len(rss.DefaultSources))
+	}
+	merged = mergeRSSSources([]RSSFeedConfig{})
+	if len(merged) != len(rss.DefaultSources) {
+		t.Fatalf("mergeRSSSources([]) len = %d, want %d", len(merged), len(rss.DefaultSources))
 	}
 }
 
