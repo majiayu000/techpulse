@@ -2,9 +2,16 @@ package httpclient
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"syscall"
 	"time"
 )
 
@@ -145,12 +152,104 @@ func (c *Client) GetBody(ctx context.Context, url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// isRetryableError checks if the error is retryable.
+// isRetryableError reports whether err should trigger another request attempt.
+// Only timeouts and temporary/network-transient failures are retryable.
+// context.Canceled, TLS/x509 certificate errors, and other permanent failures are not.
 func (c *Client) isRetryableError(err error) bool {
-	// Timeout and connection errors are generally retryable
-	if err == context.DeadlineExceeded {
+	if err == nil {
+		return false
+	}
+
+	// Unwrap common HTTP client wrappers so classification sees the root cause.
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	// Network errors (connection refused, etc.) are retryable
-	return true
+
+	// Permanent TLS / certificate failures must not be retried.
+	if isPermanentTLSError(err) {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.Temporary() || dnsErr.Timeout()
+	}
+
+	if isTransientSyscallError(err) {
+		return true
+	}
+
+	return false
+}
+
+func isPermanentTLSError(err error) bool {
+	var (
+		unknownAuth x509.UnknownAuthorityError
+		hostnameErr x509.HostnameError
+		certInvalid x509.CertificateInvalidError
+		systemRoots x509.SystemRootsError
+		certVerify  *tls.CertificateVerificationError
+	)
+	switch {
+	case errors.As(err, &unknownAuth),
+		errors.As(err, &hostnameErr),
+		errors.As(err, &certInvalid),
+		errors.As(err, &systemRoots),
+		errors.As(err, &certVerify):
+		return true
+	default:
+		return false
+	}
+}
+
+func isTransientSyscallError(err error) bool {
+	var errno syscall.Errno
+	switch {
+	case errors.As(err, &errno):
+		return isRetryableErrno(errno)
+	}
+
+	var sysErr *os.SyscallError
+	if errors.As(err, &sysErr) {
+		if errno, ok := sysErr.Err.(syscall.Errno); ok {
+			return isRetryableErrno(errno)
+		}
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if errors.As(opErr.Err, &errno) {
+			return isRetryableErrno(errno)
+		}
+		if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
+			if errno, ok := sysErr.Err.(syscall.Errno); ok {
+				return isRetryableErrno(errno)
+			}
+		}
+	}
+
+	return false
+}
+
+func isRetryableErrno(errno syscall.Errno) bool {
+	switch errno {
+	case syscall.ECONNRESET, syscall.ECONNREFUSED, syscall.ECONNABORTED,
+		syscall.EPIPE, syscall.ETIMEDOUT, syscall.EHOSTUNREACH, syscall.ENETUNREACH:
+		return true
+	default:
+		return false
+	}
 }
