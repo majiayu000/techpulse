@@ -81,6 +81,19 @@ func removeBoilerplate(html string) string {
 	return removeAdElements(html)
 }
 
+// toLowerASCII folds ASCII A-Z to a-z without changing UTF-8 byte length.
+// strings.ToLower can shrink or grow runes (e.g. "İ" → "i"), so offsets found
+// in a Unicode-lowered copy must not be used to slice the original HTML.
+func toLowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}
+
 // removeAdElements removes elements whose class or id marks them as ads or
 // tracking widgets. A keyword only counts when it appears at word boundaries
 // within one token of the space-separated class/id list, so real content such
@@ -89,7 +102,7 @@ func removeBoilerplate(html string) string {
 // matching close tag (malformed HTML or a void element) is kept so that the
 // rest of the document is never truncated.
 func removeAdElements(html string) string {
-	lower := strings.ToLower(html)
+	lower := toLowerASCII(html)
 	var out strings.Builder
 	pos := 0
 	for {
@@ -292,7 +305,9 @@ func extractMainContent(html string) string {
 // depth instead of truncating extraction at the first inner close tag;
 // listing pages commonly nest article cards inside the main article.
 func extractArticleContent(html string) string {
-	lower := strings.ToLower(html)
+	// ASCII fold only: Unicode ToLower can change byte length (İ→i), and
+	// offsets from that copy must not slice the original document.
+	lower := toLowerASCII(html)
 	from := 0
 	for {
 		_, openEnd, found := findOpenTag(lower, "article", from)

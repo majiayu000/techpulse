@@ -314,7 +314,7 @@ func TestParseFlagsGenConfigHonorsConfigPath(t *testing.T) {
 }
 
 // TestCreateConfigProviderKeepsLastGoodOnFailure verifies daemon hot-reload
-// keeps the last known good config on load or file-validation failure and
+// keeps the last known good config on load or effective-validation failure and
 // picks up good edits again afterwards.
 func TestCreateConfigProviderKeepsLastGoodOnFailure(t *testing.T) {
 	resetGlobals(t)
@@ -352,6 +352,43 @@ func TestCreateConfigProviderKeepsLastGoodOnFailure(t *testing.T) {
 	}
 	if got := provider(); got.Limit != 70 {
 		t.Errorf("after fixing file, Limit = %d, want 70", got.Limit)
+	}
+}
+
+// TestCreateConfigProviderValidatesAfterCLIOverrides ensures hot-reload
+// validates the effective config (file + CLI), matching startup. A file limit
+// that is invalid alone must still reload when --limit overrides it.
+func TestCreateConfigProviderValidatesAfterCLIOverrides(t *testing.T) {
+	resetGlobals(t)
+	path := writeConfig(t, "limit: 999\n")
+	configPath = path
+	cliOpts = cliFlags{
+		limit: 10,
+		set:   map[string]bool{"limit": true},
+	}
+
+	base := techpulse.DefaultConfig()
+	base.Limit = 10
+	provider := createConfigProvider(base)
+	if provider == nil {
+		t.Fatal("expected non-nil provider when a config file exists")
+	}
+
+	got := provider()
+	if got.Limit != 10 {
+		t.Fatalf("reload with CLI override Limit = %d, want 10 (file had invalid 999)", got.Limit)
+	}
+
+	// Changing other file fields still applies; CLI limit remains authoritative.
+	if err := os.WriteFile(path, []byte("limit: 999\ntimeout: 45\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got = provider()
+	if got.Limit != 10 {
+		t.Errorf("after reload Limit = %d, want CLI override 10", got.Limit)
+	}
+	if got.Timeout != 45 {
+		t.Errorf("after reload Timeout = %d, want file value 45", got.Timeout)
 	}
 }
 

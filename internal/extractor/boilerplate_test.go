@@ -206,6 +206,33 @@ func TestExtractMainContentNestedArticle(t *testing.T) {
 	}
 }
 
+// TestExtractArticleContentPreservesUTF8Offsets ensures length-changing
+// Unicode case folds (İ→i) do not corrupt slices taken from the original HTML.
+func TestExtractArticleContentPreservesUTF8Offsets(t *testing.T) {
+	const body = "İstanbul tech briefing with length-changing case folds"
+	html := "<ARTICLE>" + body + "</ARTICLE>"
+	got := extractArticleContent(html)
+	if got != body {
+		t.Fatalf("extractArticleContent() = %q, want %q", got, body)
+	}
+}
+
+// TestRemoveAdElementsPreservesUTF8Offsets ensures ad removal still finds
+// ASCII tags when preceding text contains length-changing case folds.
+func TestRemoveAdElementsPreservesUTF8Offsets(t *testing.T) {
+	html := `<p>İstanbul</p><div class="ad-banner">Buy</div><p>Keep</p>`
+	got := removeBoilerplate(html)
+	if !strings.Contains(got, "İstanbul") {
+		t.Errorf("removeBoilerplate dropped UTF-8 content: %q", got)
+	}
+	if !strings.Contains(got, "Keep") {
+		t.Errorf("removeBoilerplate dropped trailing content: %q", got)
+	}
+	if strings.Contains(got, "Buy") {
+		t.Errorf("removeBoilerplate left ad body: %q", got)
+	}
+}
+
 func TestExtractParagraphs(t *testing.T) {
 	tests := []struct {
 		name      string

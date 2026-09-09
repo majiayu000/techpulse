@@ -150,11 +150,12 @@ func runDaemon(ctx context.Context, cfg techpulse.Config) {
 }
 
 // createConfigProvider returns a provider that re-reads the config file before
-// each daemon tick (hot-reload). A file that fails to load or fails file-level
-// validation is logged at error level and the last known good configuration is
-// kept, so a broken edit mid-run degrades to the previous good settings
-// instead of being silently ignored or half-applied. The reload re-derives the
-// config from defaults + fresh file + explicit CLI flags, matching startup.
+// each daemon tick (hot-reload). A file that fails to load, or whose effective
+// configuration (defaults + file + explicit CLI flags) fails runtime
+// validation, is logged at error level and the last known good configuration
+// is kept. Validation runs after CLI overrides — matching startup — so a file
+// value that is invalid on its own but overridden by a valid CLI flag (e.g.
+// limit: 999 with --limit 10) still reloads successfully.
 func createConfigProvider(baseCfg techpulse.Config) func() techpulse.Config {
 	path := configPath
 	if path == "" {
@@ -171,12 +172,13 @@ func createConfigProvider(baseCfg techpulse.Config) func() techpulse.Config {
 				logger.F("path", path), logger.F("error", err))
 			return lastGood
 		}
-		if errs := techpulse.ValidateFileConfig(fileCfg); len(errs) > 0 {
+		cfg := cliOpts.applyTo(techpulse.MergeWithConfig(techpulse.DefaultConfig(), fileCfg))
+		if errs := techpulse.ValidateConfig(cfg); len(errs) > 0 {
 			log.Error("Reloaded config failed validation, keeping last good config",
 				logger.F("path", path), logger.F("errors", errs.Error()))
 			return lastGood
 		}
-		lastGood = cliOpts.applyTo(techpulse.MergeWithConfig(techpulse.DefaultConfig(), fileCfg))
+		lastGood = cfg
 		return lastGood
 	}
 }
