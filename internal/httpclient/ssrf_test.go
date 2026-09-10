@@ -105,6 +105,37 @@ func TestSSRFBlocksLoopbackDial(t *testing.T) {
 	}
 }
 
+func TestSSRFTransportIgnoresAmbientProxy(t *testing.T) {
+	// Cloning DefaultTransport retains ProxyFromEnvironment. If left in place,
+	// DialContext validates the proxy hop instead of the destination when
+	// HTTP(S)_PROXY is set. The SSRF transport must clear Proxy.
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Fatal("DefaultTransport is not *http.Transport")
+	}
+	if base.Proxy == nil {
+		t.Fatal("expected DefaultTransport.Proxy (ProxyFromEnvironment) to be set")
+	}
+	cloned := base.Clone()
+	if cloned.Proxy == nil {
+		t.Fatal("expected Clone to retain ProxyFromEnvironment")
+	}
+
+	tr := ssrfTransport()
+	if tr.Proxy != nil {
+		t.Fatal("ssrfTransport must set Proxy to nil so dial-time checks apply to the destination")
+	}
+
+	c := New(WithRetryConfig(NoRetryConfig()))
+	_, err := c.Get(context.Background(), "http://127.0.0.1:9/")
+	if err == nil {
+		t.Fatal("expected SSRF block for loopback")
+	}
+	if !errors.Is(err, ErrSSRFBlocked) && !strings.Contains(err.Error(), "ssrf") {
+		t.Fatalf("expected SSRF error, got %v", err)
+	}
+}
+
 func TestCheckRedirectRejectsPrivateHop(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:8080/secret", nil)
 	if err != nil {

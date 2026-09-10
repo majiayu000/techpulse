@@ -150,8 +150,10 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 }
 
 func ssrfTransport() *http.Transport {
-	// Clone DefaultTransport settings so we keep proxy/TLS defaults,
-	// then replace DialContext with the SSRF-safe dialer.
+	// Clone DefaultTransport settings for TLS/connection pooling defaults,
+	// then replace DialContext with the SSRF-safe dialer and disable ambient
+	// HTTP(S)_PROXY. ProxyFromEnvironment would dial the proxy hop instead of
+	// the destination, so dial-time IP checks would validate the wrong address.
 	base, ok := http.DefaultTransport.(*http.Transport)
 	var tr *http.Transport
 	if ok {
@@ -159,6 +161,7 @@ func ssrfTransport() *http.Transport {
 	} else {
 		tr = &http.Transport{}
 	}
+	tr.Proxy = nil
 	tr.DialContext = safeDialContext
 	return tr
 }
