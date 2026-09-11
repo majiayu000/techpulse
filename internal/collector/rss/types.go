@@ -3,9 +3,15 @@ package rss
 
 import (
 	"encoding/xml"
+	"html"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+// atomHTMLTagRe strips markup from Atom type="html" text constructs after
+// the XML decoder has already unescaped entity-encoded tags.
+var atomHTMLTagRe = regexp.MustCompile(`(?is)<[^>]*>`)
 
 // Feed represents an RSS feed.
 type Feed struct {
@@ -64,6 +70,8 @@ type AtomText struct {
 }
 
 // UnmarshalXML decodes Atom text constructs, including nested XHTML bodies.
+// type="html" and type="xhtml" values are normalized to plain text so titles
+// and summaries do not carry raw markup into generated Markdown.
 func (t *AtomText) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	for _, attr := range start.Attr {
 		if attr.Name.Local == "type" {
@@ -88,8 +96,30 @@ func (t *AtomText) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 			b.Write(v)
 		}
 	}
-	t.Value = strings.TrimSpace(b.String())
+	t.Value = normalizeAtomText(t.Type, strings.TrimSpace(b.String()))
 	return nil
+}
+
+// normalizeAtomText turns Atom text constructs into plain text according to
+// their declared type. text (and the omitted default) is returned unchanged;
+// html strips tags after XML entity decoding; xhtml uses the CharData already
+// collected from nested markup and collapses residual whitespace.
+func normalizeAtomText(typ, value string) string {
+	switch strings.ToLower(strings.TrimSpace(typ)) {
+	case "", "text", "text/plain":
+		return value
+	case "html", "text/html":
+		// encoding/xml already decoded &lt;p&gt;… into <p>…; strip tags and
+		// unescape any remaining entities so Markdown sees plain text.
+		plain := atomHTMLTagRe.ReplaceAllString(value, " ")
+		plain = html.UnescapeString(plain)
+		return strings.Join(strings.Fields(plain), " ")
+	case "xhtml", "application/xhtml+xml":
+		// Nested XHTML contributes CharData only; collapse whitespace.
+		return strings.Join(strings.Fields(value), " ")
+	default:
+		return value
+	}
 }
 
 // AtomLink represents a link element in an Atom feed.

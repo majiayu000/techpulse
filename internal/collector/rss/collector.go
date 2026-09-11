@@ -150,7 +150,15 @@ func (c *Collector) fetchFeed(ctx context.Context, source Source, opts collector
 		return nil, fmt.Errorf("read feed body: %w", err)
 	}
 
-	items, err := decodeFeed(data, source.URL)
+	// Prefer the final response URL after redirects so relative Atom hrefs
+	// resolve against the document's actual location, not the configured
+	// source URL that may have moved to a CDN or new host.
+	feedURL := source.URL
+	if resp.Request != nil && resp.Request.URL != nil {
+		feedURL = resp.Request.URL.String()
+	}
+
+	items, err := decodeFeed(data, feedURL)
 	if err != nil {
 		return nil, err
 	}

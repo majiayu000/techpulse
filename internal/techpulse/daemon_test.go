@@ -338,11 +338,10 @@ func TestDaemonRetriesInitialCollectionBeforeInterval(t *testing.T) {
 		done <- count
 	}()
 
-	// Wait until the successful third attempt has fully completed (OnDone
-	// fires after each attempt returns) before cancelling, so the cancel does
-	// not abort a collection that is in flight.
+	// Wait until the successful third attempt has completed (OnDone fires
+	// only after a nil Run result) before cancelling.
 	deadline := time.Now().Add(2 * time.Second)
-	for atomic.LoadInt32(&completed) < 3 && time.Now().Before(deadline) {
+	for atomic.LoadInt32(&completed) < 1 && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	cancel()
@@ -354,6 +353,9 @@ func TestDaemonRetriesInitialCollectionBeforeInterval(t *testing.T) {
 		}
 		if count < 1 {
 			t.Errorf("expected at least 1 successful collection after retry, got %d", count)
+		}
+		if atomic.LoadInt32(&completed) != 1 {
+			t.Errorf("OnDone should fire once on success, got %d", completed)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("daemon did not stop after cancellation")

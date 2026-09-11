@@ -685,8 +685,8 @@ func TestDecodeAtomXHTMLTextConstructs(t *testing.T) {
 	if !strings.Contains(items[0].Description, "artificial intelligence") {
 		t.Errorf("xhtml summary empty/lost: %q", items[0].Description)
 	}
-	if items[1].Description != "<p>Escaped HTML content stays intact</p>" {
-		t.Errorf("html content = %q", items[1].Description)
+	if items[1].Description != "Escaped HTML content stays intact" {
+		t.Errorf("html content = %q, want plain text without tags", items[1].Description)
 	}
 }
 
@@ -821,5 +821,51 @@ func TestCollectorCollectAtomXHTMLAndRelative(t *testing.T) {
 	wantURL := server.URL + "/feeds/story/1"
 	if articles[0].URL != wantURL {
 		t.Errorf("URL = %q, want %q", articles[0].URL, wantURL)
+	}
+}
+
+// Relative Atom links after an HTTP redirect must resolve against the final
+// response URL, not the originally configured source URL.
+func TestCollectorResolvesRelativeLinksAgainstRedirectURL(t *testing.T) {
+	const feed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Redirected</title>
+  <entry>
+    <id>tag:example.com,2026:redir-1</id>
+    <title type="html">&lt;b&gt;Redirected News&lt;/b&gt;</title>
+    <link rel="alternate" href="articles/one"/>
+    <summary>body</summary>
+  </entry>
+</feed>`
+
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cdn/feed.xml" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/atom+xml")
+		w.Write([]byte(feed))
+	}))
+	defer final.Close()
+
+	start := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL+"/cdn/feed.xml", http.StatusFound)
+	}))
+	defer start.Close()
+
+	c := newFastCollector([]Source{{Name: "Redirected", URL: start.URL + "/old/feed.xml"}})
+	articles, err := c.Collect(context.Background(), collector.Options{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(articles) != 1 {
+		t.Fatalf("got %d articles, want 1", len(articles))
+	}
+	if articles[0].Title != "Redirected News" {
+		t.Errorf("html title = %q, want plain text", articles[0].Title)
+	}
+	wantURL := final.URL + "/cdn/articles/one"
+	if articles[0].URL != wantURL {
+		t.Errorf("URL = %q, want final-host relative resolve %q", articles[0].URL, wantURL)
 	}
 }

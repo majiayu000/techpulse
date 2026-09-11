@@ -203,6 +203,13 @@ func chmodWithUmask(path string, perm os.FileMode) error {
 	return nil
 }
 
+// EnforceRetention removes expired daily archives without rewriting the
+// digest. Callers that preserve an existing digest (for example when keyword
+// filters remove every article) still need retention to run on each cycle.
+func (s *MarkdownStorage) EnforceRetention() error {
+	return s.enforceRetention()
+}
+
 // enforceRetention removes daily archive files strictly older than
 // Config.RetentionDays, judged by the date encoded in their file names
 // (<yyyy-mm-dd>.md). A non-positive RetentionDays disables retention

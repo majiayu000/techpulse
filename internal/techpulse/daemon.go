@@ -30,7 +30,7 @@ type DaemonConfig struct {
 	TechPulseFactory func(Config) *TechPulse // Custom factory (for testing)
 	OnStart          func()                  // Called when daemon starts
 	OnTick           func()                  // Called before each collection
-	OnDone           func()                  // Called after each collection
+	OnDone           func()                  // Called after each successful collection
 	OnStop           func()                  // Called when daemon stops
 	OnConfigReload   func(old, new Config)   // Called when config is reloaded
 
@@ -221,14 +221,15 @@ func (d *Daemon) collect(ctx context.Context) error {
 
 	d.log.Info("Starting collection", logger.F("time", time.Now().Format(time.RFC3339)))
 	err := tp.Run(ctx)
-
-	if d.config.OnDone != nil {
-		d.config.OnDone()
-	}
-
 	if err != nil {
 		d.log.Error("Collection failed", logger.F("error", err))
 		return err
+	}
+
+	// Success-oriented callbacks (e.g. CLI "Report saved") must not fire on
+	// failed attempts, including short-backoff startup retries.
+	if d.config.OnDone != nil {
+		d.config.OnDone()
 	}
 
 	d.log.Info("Collection completed")

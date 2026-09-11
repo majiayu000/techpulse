@@ -164,11 +164,17 @@ func (tp *TechPulse) Run(ctx context.Context) error {
 	// Filtering can legitimately remove everything. Never destroy last-good
 	// output with an empty report: keep the previous digest, say so loudly,
 	// and treat the run as recorded (the notice itself is the run record).
+	// Still run retention: Save is otherwise the only production call site
+	// for archive cleanup, so empty-filter preserve cycles must not leave
+	// RetentionDays archives forever.
 	if len(filtered) == 0 && tp.hasPreviousDigest() {
 		tp.log.Warn("No articles passed filtering - keeping previous digest",
 			logger.F("collected", len(allArticles)),
 			logger.F("digest", tp.digestPath()),
 		)
+		if err := tp.enforceRetention(); err != nil {
+			return fmt.Errorf("retention while preserving digest: %w", err)
+		}
 		return nil
 	}
 
@@ -204,6 +210,16 @@ func (tp *TechPulse) Run(ctx context.Context) error {
 // digestPath returns the path of the digest file managed by storage.
 func (tp *TechPulse) digestPath() string {
 	return filepath.Join(tp.storeCfg.BaseDir, tp.storeCfg.DigestFile)
+}
+
+// enforceRetention runs archive retention without rewriting DIGEST.md.
+// MarkdownStorage is the production implementation; other Storage types are
+// a no-op so tests can inject fakes without implementing retention.
+func (tp *TechPulse) enforceRetention() error {
+	if ms, ok := tp.storage.(*storage.MarkdownStorage); ok {
+		return ms.EnforceRetention()
+	}
+	return nil
 }
 
 // hasPreviousDigest reports whether a non-empty digest from an earlier run

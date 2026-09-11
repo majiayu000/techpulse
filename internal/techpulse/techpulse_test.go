@@ -11,7 +11,9 @@ import (
 
 	"github.com/majiayu000/techpulse/internal/collector"
 	"github.com/majiayu000/techpulse/internal/filter"
+	"github.com/majiayu000/techpulse/internal/logger"
 	"github.com/majiayu000/techpulse/internal/storage"
+	"github.com/majiayu000/techpulse/internal/summarizer"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -147,6 +149,63 @@ func TestRunKeepsPreviousDigestWhenFilterRemovesEverything(t *testing.T) {
 	archive := filepath.Join(dir, storage.DefaultConfig().ArchiveDir, time.Now().Format("2006-01-02")+".md")
 	if _, statErr := os.Stat(archive); !os.IsNotExist(statErr) {
 		t.Errorf("today's archive %s should not exist after preserved run", archive)
+	}
+}
+
+func TestRunPreservedDigestStillEnforcesRetention(t *testing.T) {
+	dir := t.TempDir()
+	storeCfg := storage.DefaultConfig()
+	storeCfg.BaseDir = dir
+	storeCfg.RetentionDays = 5
+
+	digest := filepath.Join(dir, storeCfg.DigestFile)
+	writeDigest(t, digest, "# previous good digest\n")
+
+	archiveDir := filepath.Join(dir, storeCfg.ArchiveDir)
+	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldName := time.Now().AddDate(0, 0, -10).Format("2006-01-02") + ".md"
+	oldPath := filepath.Join(archiveDir, oldName)
+	if err := os.WriteFile(oldPath, []byte("# old\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	keepName := time.Now().AddDate(0, 0, -2).Format("2006-01-02") + ".md"
+	keepPath := filepath.Join(archiveDir, keepName)
+	if err := os.WriteFile(keepPath, []byte("# keep\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := collector.NewRegistry()
+	reg.Register(&fakeCollector{name: "src", fn: func(_ context.Context, _ collector.Options) ([]collector.Article, error) {
+		return []collector.Article{testArticle(1, "hello world")}, nil
+	}})
+
+	tp := &TechPulse{
+		config:     Config{Limit: 10, RetentionDays: storeCfg.RetentionDays},
+		registry:   reg,
+		pipeline:   emptyFilterPipeline(),
+		summarizer: summarizer.NewBasicSummarizer(),
+		storage:    storage.NewMarkdownStorage(storeCfg),
+		storeCfg:   storeCfg,
+		log:        logger.NewNopLogger(),
+	}
+
+	if err := tp.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Errorf("archive older than RetentionDays should be removed on preserve path")
+	}
+	if _, err := os.Stat(keepPath); err != nil {
+		t.Errorf("recent archive should remain: %v", err)
+	}
+	got, err := os.ReadFile(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "# previous good digest\n" {
+		t.Errorf("digest should stay preserved, got %q", got)
 	}
 }
 
