@@ -72,5 +72,5 @@ fi
 echo "============================================================"
 echo ""
 
-# 运行：只传递用户显式提供的限制参数
-./orchestrator "${ARGS[@]}"
+# Replace this wrapper so nohup/background PIDs and SIGTERM reach the orchestrator.
+exec ./orchestrator "${ARGS[@]}"

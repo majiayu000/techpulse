@@ -334,6 +334,94 @@ func TestGitDetector_CreateCheckpoint(t *testing.T) {
 	}
 }
 
+func TestGitDetector_QuotedPathWithSpacesIsProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	spaced := filepath.Join(tmpDir, "my file.txt")
+	if err := os.WriteFile(spaced, []byte("v1"), 0644); err != nil {
+		t.Fatalf("create spaced file: %v", err)
+	}
+	if err := gd.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if err := os.WriteFile(spaced, []byte("v2-spaced-edit"), 0644); err != nil {
+		t.Fatalf("edit spaced file: %v", err)
+	}
+	hasProgress, err := gd.Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !hasProgress {
+		t.Fatal("expected progress when editing an already-dirty path containing spaces")
+	}
+}
+
+func TestGitDetector_SymlinkRetargetIsProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	a := filepath.Join(tmpDir, "a.txt")
+	b := filepath.Join(tmpDir, "b.txt")
+	if err := os.WriteFile(a, []byte("same"), 0644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if err := os.WriteFile(b, []byte("same"), 0644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+	link := filepath.Join(tmpDir, "alias")
+	if err := os.Symlink(a, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if err := gd.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("remove link: %v", err)
+	}
+	if err := os.Symlink(b, link); err != nil {
+		t.Fatalf("retarget link: %v", err)
+	}
+	hasProgress, err := gd.Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !hasProgress {
+		t.Fatal("expected progress when an untracked symlink is retargeted")
+	}
+}
+
+func TestDecodePorcelainPath(t *testing.T) {
+	cases := map[string]string{
+		`plain.txt`:           "plain.txt",
+		`"my file.txt"`:       "my file.txt",
+		`"path\\with\\slash"`: `path\with\slash`,
+		`"a\tb"`:              "a\tb",
+	}
+	for in, want := range cases {
+		if got := decodePorcelainPath(in); got != want {
+			t.Errorf("decodePorcelainPath(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestNormalizePorcelainZ(t *testing.T) {
+	raw := "?? my file.txt\x00 M tracked.txt\x00"
+	got := normalizePorcelainZ(raw)
+	want := "?? my file.txt\n M tracked.txt\n"
+	if got != want {
+		t.Fatalf("normalizePorcelainZ=%q, want %q", got, want)
+	}
+}
+
 func TestGitDetector_ManyChangedFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 	gd, err := NewGitDetector(tmpDir)

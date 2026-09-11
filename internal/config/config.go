@@ -2,6 +2,8 @@
 package config
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -68,6 +70,9 @@ func Load(path string) (*Config, error) {
 
 // Validate 验证配置有效性
 func (c *Config) Validate() error {
+	if math.IsNaN(c.MaxCostUSD) || math.IsInf(c.MaxCostUSD, 0) {
+		return fmt.Errorf("max_cost_usd must be a finite number")
+	}
 	if c.MaxIterations < 0 {
 		c.MaxIterations = 0 // 0 表示无限
 	}

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -46,11 +47,16 @@ func run() int {
 
 	// Only apply CLI overrides for flags that were explicitly supplied so
 	// config.yaml limits are preserved when the binary is invoked bare.
+	var invalidCost bool
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "max-iterations":
 			cfg.MaxIterations = *maxIterations
 		case "max-cost":
+			if math.IsNaN(*maxCost) || math.IsInf(*maxCost, 0) {
+				invalidCost = true
+				return
+			}
 			cfg.MaxCostUSD = *maxCost
 		case "max-duration":
 			if *maxDurationHours <= 0 {
@@ -60,6 +66,10 @@ func run() int {
 			}
 		}
 	})
+	if invalidCost {
+		fmt.Fprintf(os.Stderr, "invalid --max-cost: must be a finite number\n")
+		return 1
+	}
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "validate config: %v\n", err)
 		return 1
@@ -87,23 +97,27 @@ func run() int {
 	printf := func(format string, args ...any) {
 		fmt.Fprintf(out, format, args...)
 	}
+	// Post-open diagnostics must reach the retained run log (stdout/stderr may be /dev/null).
+	eprintf := func(format string, args ...any) {
+		fmt.Fprintf(out, format, args...)
+	}
 
 	mem, err := memory.NewManager(memoryDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "init memory: %v\n", err)
+		eprintf("init memory: %v\n", err)
 		return 1
 	}
 
 	hashDet, err := progress.NewHashDetector(mem)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "init hash detector: %v\n", err)
+		eprintf("init hash detector: %v\n", err)
 		return 1
 	}
 	detectors := []progress.Detector{hashDet}
 	if cfg.UseGitDetection {
 		gitDet, err := progress.NewGitDetector(workspaceDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: git detector disabled: %v\n", err)
+			eprintf("warning: git detector disabled: %v\n", err)
 		} else {
 			// Operational logs must not reset consecutive_no_progress.
 			gitDet.IgnorePaths(logPath)
@@ -167,7 +181,7 @@ func run() int {
 		if cfg.StopWhenEmpty {
 			hasPending, err := mem.HasPendingTasks()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "check pending tasks: %v\n", err)
+				eprintf("check pending tasks: %v\n", err)
 				stopReason = "error"
 				break
 			}
@@ -194,7 +208,7 @@ func run() int {
 		printf("--- iteration %d ---\n", iterations)
 
 		if err := multi.Reset(); err != nil {
-			fmt.Fprintf(os.Stderr, "reset detectors: %v\n", err)
+			eprintf("reset detectors: %v\n", err)
 		}
 
 		result := runner.Run(runCtx)
@@ -218,7 +232,7 @@ func run() int {
 
 		prog, err := multi.Detect()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "progress detect: %v\n", err)
+			eprintf("progress detect: %v\n", err)
 		} else if prog != nil && prog.HasProgress {
 			noProgressCount = 0
 			printf("progress: yes (%s) %s\n", prog.Source, prog.Details)

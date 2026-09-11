@@ -198,16 +198,60 @@ func (g *GitDetector) getCurrentCommit() string {
 }
 
 // getStatusPorcelain returns a stable git status --porcelain snapshot.
+// -z avoids C-style quoting so paths with spaces/non-ASCII fingerprint correctly.
 // --untracked-files=all enumerates files under untracked directories so edits
 // beneath an existing dirty directory change the fingerprint.
 func (g *GitDetector) getStatusPorcelain() string {
-	cmd := exec.Command("git", "status", "--porcelain", "--untracked-files=all")
+	cmd := exec.Command("git", "status", "--porcelain", "-z", "--untracked-files=all")
 	cmd.Dir = g.workspaceDir
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
-	return g.filterIgnoredStatus(string(output))
+	return g.filterIgnoredStatus(normalizePorcelainZ(string(output)))
+}
+
+// normalizePorcelainZ converts NUL-terminated porcelain into newline records
+// with unquoted paths: "XY path\n" (renames keep the destination path only).
+func normalizePorcelainZ(raw string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(raw) {
+		// Skip empty records produced by trailing NULs.
+		if raw[i] == 0 {
+			i++
+			continue
+		}
+		end := strings.IndexByte(raw[i:], 0)
+		if end < 0 {
+			break
+		}
+		entry := raw[i : i+end]
+		i += end + 1
+		if len(entry) < 3 {
+			continue
+		}
+		xy := entry[:2]
+		path := entry[3:] // after "XY "
+		// Rename/copy: PATH1\0PATH2\0 — consume the destination path next.
+		if len(xy) == 2 && (xy[0] == 'R' || xy[0] == 'C' || xy[1] == 'R' || xy[1] == 'C') {
+			if i < len(raw) {
+				end2 := strings.IndexByte(raw[i:], 0)
+				if end2 >= 0 {
+					path = raw[i : i+end2]
+					i += end2 + 1
+				}
+			}
+		}
+		if path == "" {
+			continue
+		}
+		b.WriteString(xy)
+		b.WriteByte(' ')
+		b.WriteString(path)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func (g *GitDetector) filterIgnoredStatus(status string) string {
@@ -225,7 +269,7 @@ func (g *GitDetector) filterIgnoredStatus(status string) string {
 			b.WriteByte('\n')
 			continue
 		}
-		path := strings.TrimSpace(line[3:])
+		path := decodePorcelainPath(strings.TrimSpace(line[3:]))
 		if i := strings.Index(path, " -> "); i >= 0 {
 			path = path[i+4:]
 		}
@@ -278,8 +322,20 @@ func (g *GitDetector) hashWorkspaceFile(relPath string) string {
 		// Missing path (deleted) still contributes a stable sentinel.
 		return "missing:" + err.Error()
 	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(full)
+		if err != nil {
+			return "missing:" + err.Error()
+		}
+		sum := sha256.Sum256([]byte("symlink:" + target))
+		return hex.EncodeToString(sum[:])
+	}
 	if info.IsDir() {
 		return g.hashDirectory(full)
+	}
+	if !info.Mode().IsRegular() {
+		// Avoid blocking on FIFOs/devices; fingerprint metadata only.
+		return fmt.Sprintf("special:%v:%d", info.Mode(), info.Size())
 	}
 	data, err := os.ReadFile(full)
 	if err != nil {
@@ -306,6 +362,20 @@ func (g *GitDetector) hashDirectory(dir string) string {
 		}
 		relSlash := filepath.ToSlash(rel)
 		if g.isIgnored(relSlash) {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				fmt.Fprintf(h, "%s\tmissing:%s\n", relSlash, err.Error())
+				return nil
+			}
+			sum := sha256.Sum256([]byte("symlink:" + target))
+			fmt.Fprintf(h, "%s\t%s\n", relSlash, hex.EncodeToString(sum[:]))
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			fmt.Fprintf(h, "%s\tspecial:%v:%d\n", relSlash, info.Mode(), info.Size())
 			return nil
 		}
 		data, err := os.ReadFile(path)
@@ -378,7 +448,7 @@ func porcelainFiles(status string) map[string]bool {
 			continue
 		}
 		// Porcelain: XY␠path or XY␠orig -> path
-		path := strings.TrimSpace(line[3:])
+		path := decodePorcelainPath(strings.TrimSpace(line[3:]))
 		if i := strings.Index(path, " -> "); i >= 0 {
 			path = path[i+4:]
 		}
@@ -387,6 +457,44 @@ func porcelainFiles(status string) map[string]bool {
 		}
 	}
 	return out
+}
+
+// decodePorcelainPath unquotes C-style quoted porcelain paths (spaces / non-ASCII)
+// when status was captured without -z. Paths from -z are returned unchanged.
+func decodePorcelainPath(path string) string {
+	if len(path) < 2 || path[0] != '"' || path[len(path)-1] != '"' {
+		return path
+	}
+	var b strings.Builder
+	b.Grow(len(path) - 2)
+	s := path[1 : len(path)-1]
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case 'n':
+			b.WriteByte('\n')
+		case 't':
+			b.WriteByte('\t')
+		case '"', '\\':
+			b.WriteByte(s[i])
+		default:
+			// Octal escape \NNN
+			if s[i] >= '0' && s[i] <= '7' && i+2 < len(s) &&
+				s[i+1] >= '0' && s[i+1] <= '7' && s[i+2] >= '0' && s[i+2] <= '7' {
+				v := (int(s[i]-'0') << 6) | (int(s[i+1]-'0') << 3) | int(s[i+2]-'0')
+				b.WriteByte(byte(v))
+				i += 2
+			} else {
+				b.WriteByte('\\')
+				b.WriteByte(s[i])
+			}
+		}
+	}
+	return b.String()
 }
 
 // CreateCheckpoint 创建检查点（自动 commit）
