@@ -133,8 +133,7 @@ func normalizeAtomText(typ, value string) string {
 	switch strings.ToLower(strings.TrimSpace(typ)) {
 	case "", "text", "text/plain":
 		// encoding/xml already turned &lt;…&gt; into <…>; escape so
-		// SanitizeMarkdownText (which does not escape angle brackets) cannot
-		// emit active HTML into generated digests.
+		// digest-bound text stays inert even before SanitizeMarkdownText.
 		return html.EscapeString(value)
 	case "html", "text/html":
 		// encoding/xml already decoded &lt;p&gt;… into <p>…; strip tags and
@@ -275,6 +274,31 @@ func resolveAtomHref(href string, bases ...string) string {
 		return href
 	}
 	return effective.ResolveReference(ref).String()
+}
+
+// normalizeRSSItem hardens classic RSS 2.0 item text the same way Atom
+// text constructs are normalized: titles escape entity-decoded angle
+// brackets, and descriptions (commonly HTML) are tag-stripped then escaped
+// so default feeds cannot inject raw markup into digests.
+func normalizeRSSItem(item Item) Item {
+	item.Title = html.EscapeString(item.Title)
+	item.Description = normalizeRSSHTMLField(item.Description)
+	if item.Author != "" {
+		item.Author = html.EscapeString(item.Author)
+	}
+	if item.Creator != "" {
+		item.Creator = html.EscapeString(item.Creator)
+	}
+	return item
+}
+
+// normalizeRSSHTMLField strips markup from an RSS description-like field
+// after XML entity decoding, then re-escapes so residual brackets stay inert.
+func normalizeRSSHTMLField(value string) string {
+	plain := atomHTMLTagRe.ReplaceAllString(value, " ")
+	plain = html.UnescapeString(plain)
+	plain = strings.Join(strings.Fields(plain), " ")
+	return html.EscapeString(plain)
 }
 
 // Source represents a configured RSS source.

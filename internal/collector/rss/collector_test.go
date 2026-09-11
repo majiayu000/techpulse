@@ -895,8 +895,56 @@ func TestDecodeAtomXHTMLPreservesInterElementSeparators(t *testing.T) {
 	}
 }
 
+// Classic RSS 2.0 titles/descriptions must escape (and strip HTML from
+// descriptions) so default feeds cannot inject raw markup into digests.
+func TestDecodeRSSEscapesTitlesAndDescriptions(t *testing.T) {
+	const feed = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Classic RSS Escape</title>
+    <item>
+      <title>&lt;img src=x onerror=alert(1)&gt; Breakthrough</title>
+      <link>https://example.com/rss-esc-1</link>
+      <description>&lt;p&gt;Major &amp;lt;script&amp;gt; advancement&lt;/p&gt;</description>
+      <guid>rss-esc-1</guid>
+    </item>
+    <item>
+      <title>Plain Title</title>
+      <link>https://example.com/rss-esc-2</link>
+      <description><![CDATA[<div>see <b>bold</b> &lt;img src=x&gt; text</div>]]></description>
+      <guid>rss-esc-2</guid>
+    </item>
+  </channel>
+</rss>`
+	items, err := decodeFeed([]byte(feed), "https://example.com/feed.xml")
+	if err != nil {
+		t.Fatalf("decodeFeed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+	if strings.ContainsAny(items[0].Title, "<>") {
+		t.Errorf("rss title still has raw brackets: %q", items[0].Title)
+	}
+	if !strings.Contains(items[0].Title, "&lt;img") || !strings.Contains(items[0].Title, "Breakthrough") {
+		t.Errorf("rss title = %q, want escaped markup plus Breakthrough", items[0].Title)
+	}
+	if strings.ContainsAny(items[0].Description, "<>") {
+		t.Errorf("rss description still has raw brackets: %q", items[0].Description)
+	}
+	if !strings.Contains(items[0].Description, "&lt;script&gt;") {
+		t.Errorf("rss description = %q, want escaped script literal after strip", items[0].Description)
+	}
+	if strings.ContainsAny(items[1].Description, "<>") {
+		t.Errorf("cdata description still has raw brackets: %q", items[1].Description)
+	}
+	if !strings.Contains(items[1].Description, "see bold") || !strings.Contains(items[1].Description, "&lt;img") {
+		t.Errorf("cdata description = %q, want stripped tags plus escaped img", items[1].Description)
+	}
+}
+
 // Default Atom type="text" must escape entity-decoded angle brackets so raw
-// HTML does not reach Markdown digests (SanitizeMarkdownText does not escape <>).
+// HTML does not reach Markdown digests.
 func TestDecodeAtomTextEscapesLiteralMarkup(t *testing.T) {
 	const feed = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">

@@ -24,6 +24,8 @@ func TestSanitizeMarkdownText(t *testing.T) {
 		{"brackets escaped", "see [this] link", "see \\[this\\] link"},
 		{"backslash before bracket escaped first", `Read this\](https://attacker.example)`, `Read this\\\](https://attacker.example)`},
 		{"DEL stripped", "a\x7fb", "ab"},
+		{"angle brackets escaped", `<img src=x onerror=alert(1)>`, `&lt;img src=x onerror=alert(1)&gt;`},
+		{"pre-escaped entities not double-escaped", `see &lt;b&gt;bold&lt;/b&gt;`, `see &lt;b&gt;bold&lt;/b&gt;`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -105,5 +107,23 @@ func TestGenerateMarkdownSanitizesRemoteContent(t *testing.T) {
 	// Brackets must be escaped, so the link breakout renders inert.
 	if !strings.Contains(md, `\](https://evil.example`) {
 		t.Errorf("expected escaped bracket in output:\n%s", md)
+	}
+}
+
+func TestGenerateMarkdownEscapesAngleBrackets(t *testing.T) {
+	s := NewBasicSummarizer()
+	var art EnrichedArticle
+	art.Title = `<script>alert(1)</script> AI news`
+	art.URL = "https://example.com/safe"
+	art.Summary = `see <img src=x onerror=alert(1)> payload`
+	art.Importance = 5
+	md := s.generateMarkdown("2026-09-12", []EnrichedArticle{art}, Stats{TotalArticles: 1})
+	for _, bad := range []string{"<script>", "<img"} {
+		if strings.Contains(md, bad) {
+			t.Errorf("generateMarkdown leaked raw HTML %q:\n%s", bad, md)
+		}
+	}
+	if !strings.Contains(md, "&lt;script&gt;") || !strings.Contains(md, "&lt;img") {
+		t.Errorf("expected escaped angle brackets in output:\n%s", md)
 	}
 }

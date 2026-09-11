@@ -197,7 +197,7 @@ func decodeFeed(data []byte, feedURL string) ([]Item, error) {
 		}
 		items := make([]Item, 0, len(feed.Channel.Items))
 		for _, item := range feed.Channel.Items {
-			items = append(items, item)
+			items = append(items, normalizeRSSItem(item))
 		}
 		return items, nil
 	case "feed":

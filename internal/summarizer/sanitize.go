@@ -5,16 +5,23 @@ import (
 	"strings"
 )
 
-// sanitizeTextReplacer strips nothing by itself; text sanitization drops
-// control characters and escapes backslashes then square brackets so
-// remote-controlled strings cannot forge Markdown structure (headings via
-// newlines, link breakouts via brackets or pre-escaped closing brackets).
-var bracketEscaper = strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]")
+// markdownTextEscaper escapes Markdown/HTML-sensitive characters after
+// control stripping: backslashes then square brackets (link breakouts),
+// then angle brackets (raw HTML injection into digests). Ampersands are
+// left alone so already-escaped feed text (e.g. &lt;) is not double-escaped.
+var markdownTextEscaper = strings.NewReplacer(
+	"\\", "\\\\",
+	"[", "\\[",
+	"]", "\\]",
+	"<", "&lt;",
+	">", "&gt;",
+)
 
 // SanitizeMarkdownText makes a remote-controlled string safe to embed in
 // generated Markdown: control characters (including newlines that could
-// forge report structure) are removed and square brackets are escaped so
-// the text cannot break out of link-text position.
+// forge report structure) are removed; square brackets are escaped so the
+// text cannot break out of link-text position; and angle brackets are
+// escaped so classic RSS / remote titles cannot inject raw HTML into digests.
 func SanitizeMarkdownText(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -24,7 +31,7 @@ func SanitizeMarkdownText(s string) string {
 		}
 		b.WriteRune(r)
 	}
-	return bracketEscaper.Replace(b.String())
+	return markdownTextEscaper.Replace(b.String())
 }
 
 // SafeLinkURL validates a remote-supplied URL for use as a Markdown link
