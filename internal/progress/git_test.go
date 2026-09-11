@@ -120,6 +120,76 @@ func TestGitDetector_PersistentDirtyIsNotProgress(t *testing.T) {
 	}
 }
 
+func TestGitDetector_DirtyPathContentEditIsProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	dirty := filepath.Join(tmpDir, "tracked-dirty.txt")
+	if err := os.WriteFile(dirty, []byte("v1"), 0644); err != nil {
+		t.Fatalf("create dirty file: %v", err)
+	}
+	if err := gd.Reset(); err != nil {
+		t.Fatalf("Reset failed: %v", err)
+	}
+
+	// Same porcelain entry (?? or M) but different contents must count as progress.
+	if err := os.WriteFile(dirty, []byte("v2-edited-during-worker"), 0644); err != nil {
+		t.Fatalf("edit dirty file: %v", err)
+	}
+	hasProgress, err := gd.Detect()
+	if err != nil {
+		t.Fatalf("Detect failed: %v", err)
+	}
+	if !hasProgress {
+		t.Fatal("expected progress when an already-dirty path's contents change")
+	}
+}
+
+func TestGitDetector_RejectsAncestorRepo(t *testing.T) {
+	parent := t.TempDir()
+	parentGD, err := NewGitDetector(parent)
+	if err != nil {
+		t.Fatalf("parent NewGitDetector failed: %v", err)
+	}
+	if !parentGD.isGitRepo() {
+		t.Fatal("expected parent temp dir to be a git repo root")
+	}
+
+	child := filepath.Join(parent, "subdir")
+	if err := os.MkdirAll(child, 0755); err != nil {
+		t.Fatalf("mkdir child: %v", err)
+	}
+
+	childGD, err := NewGitDetector(child)
+	if err != nil {
+		t.Fatalf("child NewGitDetector failed: %v", err)
+	}
+	if !childGD.isGitRepo() {
+		t.Fatal("expected child workspace to become its own git root")
+	}
+	if childGD.workspaceDir == parentGD.workspaceDir {
+		t.Fatal("child detector must not reuse the ancestor workspace path")
+	}
+
+	// Ancestor-only edits must not register as child progress.
+	if err := childGD.Reset(); err != nil {
+		t.Fatalf("child Reset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "outside.txt"), []byte("ancestor"), 0644); err != nil {
+		t.Fatalf("write ancestor file: %v", err)
+	}
+	hasProgress, err := childGD.Detect()
+	if err != nil {
+		t.Fatalf("Detect failed: %v", err)
+	}
+	if hasProgress {
+		t.Fatal("expected no progress from ancestor-repo edits outside workspace")
+	}
+}
+
 func TestGitDetector_Reset(t *testing.T) {
 	wd, _ := os.Getwd()
 	gd, err := NewGitDetector(wd)

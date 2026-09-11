@@ -1,28 +1,39 @@
 package progress
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 )
 
 // GitDetector 基于 Git 检测代码变化
 type GitDetector struct {
-	workspaceDir   string
-	lastCommit     string
-	baselineStatus string // porcelain snapshot taken at Reset
-	hasUntracked   bool
-	hasModified    bool
-	changedFiles   []string
-	statusChanged  bool
-	commitChanged  bool
+	workspaceDir    string
+	lastCommit      string
+	baselineStatus  string // porcelain snapshot taken at Reset
+	baselineContent string // content fingerprint of dirty paths at Reset
+	hasUntracked    bool
+	hasModified     bool
+	changedFiles    []string
+	statusChanged   bool
+	contentChanged  bool
+	commitChanged   bool
 }
 
 // NewGitDetector 创建 Git 检测器
 func NewGitDetector(workspaceDir string) (*GitDetector, error) {
-	g := &GitDetector{workspaceDir: workspaceDir}
+	abs, err := filepath.Abs(workspaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace dir: %w", err)
+	}
+	g := &GitDetector{workspaceDir: abs}
 
-	// 检查是否是 Git 仓库
+	// 检查是否是 Git 仓库（必须是 workspace 自身为仓库根，不能是祖先仓库）
 	if !g.isGitRepo() {
 		// 初始化 Git 仓库
 		if err := g.initRepo(); err != nil {
@@ -33,6 +44,7 @@ func NewGitDetector(workspaceDir string) (*GitDetector, error) {
 	// 获取当前 commit 与初始状态快照
 	g.lastCommit = g.getCurrentCommit()
 	g.baselineStatus = g.getStatusPorcelain()
+	g.baselineContent = g.getContentFingerprint(g.baselineStatus)
 
 	return g, nil
 }
@@ -44,15 +56,23 @@ func (g *GitDetector) Name() string {
 func (g *GitDetector) Detect() (bool, error) {
 	currentStatus := g.getStatusPorcelain()
 	currentCommit := g.getCurrentCommit()
+	currentContent := g.getContentFingerprint(currentStatus)
 
 	g.commitChanged = currentCommit != g.lastCommit && currentCommit != ""
 	g.statusChanged = currentStatus != g.baselineStatus
+	g.contentChanged = currentContent != g.baselineContent
 
 	g.hasUntracked = g.checkUntracked()
 	g.hasModified = g.checkModified()
 	g.changedFiles = g.diffStatusFiles(g.baselineStatus, currentStatus)
+	if g.contentChanged && !g.statusChanged {
+		// Porcelain unchanged but file contents edited — surface dirty paths.
+		for path := range porcelainFiles(currentStatus) {
+			g.changedFiles = append(g.changedFiles, path)
+		}
+	}
 
-	hasProgress := g.statusChanged || g.commitChanged
+	hasProgress := g.statusChanged || g.contentChanged || g.commitChanged
 
 	if g.commitChanged {
 		g.lastCommit = currentCommit
@@ -64,10 +84,12 @@ func (g *GitDetector) Detect() (bool, error) {
 func (g *GitDetector) Reset() error {
 	g.lastCommit = g.getCurrentCommit()
 	g.baselineStatus = g.getStatusPorcelain()
+	g.baselineContent = g.getContentFingerprint(g.baselineStatus)
 	g.hasUntracked = false
 	g.hasModified = false
 	g.changedFiles = nil
 	g.statusChanged = false
+	g.contentChanged = false
 	g.commitChanged = false
 	return nil
 }
@@ -77,11 +99,11 @@ func (g *GitDetector) Details() string {
 	if g.commitChanged {
 		parts = append(parts, "新 commit")
 	}
-	if g.statusChanged {
+	if g.statusChanged || g.contentChanged {
 		if g.hasUntracked {
 			parts = append(parts, "新文件")
 		}
-		if g.hasModified {
+		if g.hasModified || g.contentChanged {
 			parts = append(parts, "已修改")
 		}
 	}
@@ -98,11 +120,26 @@ func (g *GitDetector) Details() string {
 	return strings.Join(parts, "; ")
 }
 
-// isGitRepo 检查目录是否是 Git 仓库
+// isGitRepo 检查 workspace 自身是否为 Git 仓库根目录。
+// 祖先目录中的仓库不算，避免把外层项目的变更当成 worker 进展。
 func (g *GitDetector) isGitRepo() bool {
-	cmd := exec.Command("git", "rev-parse", "--git-dir")
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	cmd.Dir = g.workspaceDir
-	return cmd.Run() == nil
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	toplevel, err := filepath.Abs(strings.TrimSpace(string(output)))
+	if err != nil {
+		return false
+	}
+	// Compare evaluated paths so symlinks do not falsely reject a valid root.
+	topEval, err1 := filepath.EvalSymlinks(toplevel)
+	wsEval, err2 := filepath.EvalSymlinks(g.workspaceDir)
+	if err1 != nil || err2 != nil {
+		return filepath.Clean(toplevel) == filepath.Clean(g.workspaceDir)
+	}
+	return filepath.Clean(topEval) == filepath.Clean(wsEval)
 }
 
 // initRepo 初始化 Git 仓库
@@ -145,6 +182,33 @@ func (g *GitDetector) getStatusPorcelain() string {
 		return ""
 	}
 	return string(output)
+}
+
+// getContentFingerprint hashes working-tree contents of every dirty path so
+// edits to already-dirty files count as progress even when porcelain is unchanged.
+func (g *GitDetector) getContentFingerprint(status string) string {
+	paths := make([]string, 0, len(porcelainFiles(status)))
+	for path := range porcelainFiles(status) {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	h := sha256.New()
+	for _, path := range paths {
+		sum := g.hashWorkspaceFile(path)
+		fmt.Fprintf(h, "%s\t%s\n", path, sum)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (g *GitDetector) hashWorkspaceFile(relPath string) string {
+	data, err := os.ReadFile(filepath.Join(g.workspaceDir, relPath))
+	if err != nil {
+		// Missing path (deleted) still contributes a stable sentinel.
+		return "missing:" + err.Error()
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // checkUntracked 检查是否有未追踪文件

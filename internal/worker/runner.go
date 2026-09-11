@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anthropic/autonomous-runner/internal/memory"
@@ -123,15 +124,29 @@ func (r *Runner) Run(ctx context.Context) *Result {
 		return result
 	}
 
-	// 收集输出
-	var output strings.Builder
-	go r.streamOutput(stdout, &output)
-	go r.streamOutput(stderr, &output)
+	// Collect stdout/stderr into separate builders and join readers before
+	// parsing. Concurrent writes to one strings.Builder are unsafe, and
+	// StdoutPipe/StderrPipe require drains to finish before relying on Wait.
+	var (
+		stdoutBuf strings.Builder
+		stderrBuf strings.Builder
+		wg        sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		r.streamOutput(stdout, &stdoutBuf)
+	}()
+	go func() {
+		defer wg.Done()
+		r.streamOutput(stderr, &stderrBuf)
+	}()
 
-	// 等待完成
 	err = cmd.Wait()
+	wg.Wait()
 	result.Duration = time.Since(start)
-	result.Output = output.String()
+	output := stdoutBuf.String() + stderrBuf.String()
+	result.Output = output
 
 	if ctx.Err() == context.DeadlineExceeded {
 		result.Error = fmt.Errorf("worker 超时 (%v)", r.timeout)
@@ -142,7 +157,7 @@ func (r *Runner) Run(ctx context.Context) *Result {
 	if err != nil {
 		result.ExitCode = cmd.ProcessState.ExitCode()
 		result.Error = err
-		result.ErrorType = r.classifyError(output.String())
+		result.ErrorType = r.classifyError(output)
 		return result
 	}
 
@@ -150,7 +165,7 @@ func (r *Runner) Run(ctx context.Context) *Result {
 	result.ExitCode = 0
 
 	// 解析成本和 tokens
-	r.parseCostAndTokens(output.String(), result)
+	r.parseCostAndTokens(output, result)
 
 	return result
 }
