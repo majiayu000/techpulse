@@ -41,10 +41,11 @@ type Item struct {
 
 // AtomFeed represents an Atom feed document (root element <feed>).
 type AtomFeed struct {
-	XMLName xml.Name    `xml:"feed"`
-	XMLBase string      `xml:"http://www.w3.org/XML/1998/namespace base,attr"`
-	Title   AtomText    `xml:"title"`
-	Entries []AtomEntry `xml:"entry"`
+	XMLName xml.Name     `xml:"feed"`
+	XMLBase string       `xml:"http://www.w3.org/XML/1998/namespace base,attr"`
+	Title   AtomText     `xml:"title"`
+	Authors []AtomPerson `xml:"author"`
+	Entries []AtomEntry  `xml:"entry"`
 }
 
 // AtomEntry represents a single entry in an Atom feed.
@@ -90,8 +91,15 @@ func (t *AtomText) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 		switch v := tok.(type) {
 		case xml.StartElement:
 			depth++
+			// Adjacent XHTML elements (e.g. </p><p>) contribute no CharData
+			// between them; insert a separator so "machine"+"learning" does
+			// not become "machinelearning" after whitespace collapse.
+			writeAtomXHTMLSeparator(&b)
 		case xml.EndElement:
 			depth--
+			if depth > 0 {
+				writeAtomXHTMLSeparator(&b)
+			}
 		case xml.CharData:
 			b.Write(v)
 		}
@@ -100,14 +108,33 @@ func (t *AtomText) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	return nil
 }
 
+// writeAtomXHTMLSeparator inserts a single space before the next token when
+// the buffer already has non-whitespace text that does not already end in
+// whitespace. Used at element boundaries while walking nested XHTML.
+func writeAtomXHTMLSeparator(b *strings.Builder) {
+	if b.Len() == 0 {
+		return
+	}
+	s := b.String()
+	last := s[len(s)-1]
+	if last == ' ' || last == '\n' || last == '\t' || last == '\r' {
+		return
+	}
+	b.WriteByte(' ')
+}
+
 // normalizeAtomText turns Atom text constructs into plain text according to
-// their declared type. text (and the omitted default) is returned unchanged;
-// html strips tags after XML entity decoding; xhtml uses the CharData already
-// collected from nested markup and collapses residual whitespace.
+// their declared type. text (and the omitted default) escapes angle brackets
+// so entity-decoded markup stays literal in Markdown; html strips tags after
+// XML entity decoding; xhtml uses CharData from nested markup and collapses
+// residual whitespace.
 func normalizeAtomText(typ, value string) string {
 	switch strings.ToLower(strings.TrimSpace(typ)) {
 	case "", "text", "text/plain":
-		return value
+		// encoding/xml already turned &lt;…&gt; into <…>; escape so
+		// SanitizeMarkdownText (which does not escape angle brackets) cannot
+		// emit active HTML into generated digests.
+		return html.EscapeString(value)
 	case "html", "text/html":
 		// encoding/xml already decoded &lt;p&gt;… into <p>…; strip tags and
 		// unescape any remaining entities so Markdown sees plain text.
@@ -118,7 +145,7 @@ func normalizeAtomText(typ, value string) string {
 		// Nested XHTML contributes CharData only; collapse whitespace.
 		return strings.Join(strings.Fields(value), " ")
 	default:
-		return value
+		return html.EscapeString(value)
 	}
 }
 
@@ -144,8 +171,9 @@ type AtomCategory struct {
 // toItem normalizes an Atom entry into the shared Item shape so that
 // article conversion and time filtering behave identically for both formats.
 // feedURL is the retrieval URL used as the outermost base for relative links;
-// feedBase is the feed-level xml:base when present.
-func (e AtomEntry) toItem(feedURL, feedBase string) Item {
+// feedBase is the feed-level xml:base when present. feedAuthors are used when
+// the entry omits its own <author> elements (Atom inheritance).
+func (e AtomEntry) toItem(feedURL, feedBase string, feedAuthors []AtomPerson) Item {
 	item := Item{
 		Title:       e.Title.Value,
 		Description: e.Summary.Value,
@@ -174,7 +202,11 @@ func (e AtomEntry) toItem(feedURL, feedBase string) Item {
 		}
 	}
 
-	for _, a := range e.Authors {
+	authors := e.Authors
+	if len(authors) == 0 {
+		authors = feedAuthors
+	}
+	for _, a := range authors {
 		if a.Name != "" {
 			item.Creator = a.Name
 			break

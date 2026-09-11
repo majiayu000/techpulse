@@ -869,3 +869,97 @@ func TestCollectorResolvesRelativeLinksAgainstRedirectURL(t *testing.T) {
 		t.Errorf("URL = %q, want final-host relative resolve %q", articles[0].URL, wantURL)
 	}
 }
+
+// Adjacent XHTML block elements must keep a word boundary so phrase filters
+// like "machine learning" still match after plain-text normalization.
+func TestDecodeAtomXHTMLPreservesInterElementSeparators(t *testing.T) {
+	const feed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Separators</title>
+  <entry>
+    <id>tag:example.com,2026:sep-1</id>
+    <title>Sep</title>
+    <link href="https://example.com/sep-1"/>
+    <summary type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>machine</p><p>learning</p></div></summary>
+  </entry>
+</feed>`
+	items, err := decodeFeed([]byte(feed), "https://example.com/feed.xml")
+	if err != nil {
+		t.Fatalf("decodeFeed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	if items[0].Description != "machine learning" {
+		t.Errorf("xhtml separators = %q, want %q", items[0].Description, "machine learning")
+	}
+}
+
+// Default Atom type="text" must escape entity-decoded angle brackets so raw
+// HTML does not reach Markdown digests (SanitizeMarkdownText does not escape <>).
+func TestDecodeAtomTextEscapesLiteralMarkup(t *testing.T) {
+	const feed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Text Escape</title>
+  <entry>
+    <id>tag:example.com,2026:text-1</id>
+    <title type="text">&lt;img src=x onerror=alert(1)&gt; AI</title>
+    <link href="https://example.com/text-1"/>
+    <summary type="text">plain &lt;b&gt;bold&lt;/b&gt; text</summary>
+  </entry>
+</feed>`
+	items, err := decodeFeed([]byte(feed), "https://example.com/feed.xml")
+	if err != nil {
+		t.Fatalf("decodeFeed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	if strings.Contains(items[0].Title, "<img") {
+		t.Errorf("text title still has raw HTML: %q", items[0].Title)
+	}
+	if !strings.Contains(items[0].Title, "&lt;img") || !strings.Contains(items[0].Title, "AI") {
+		t.Errorf("text title = %q, want escaped markup plus AI", items[0].Title)
+	}
+	if strings.Contains(items[0].Description, "<b>") {
+		t.Errorf("text summary still has raw HTML: %q", items[0].Description)
+	}
+	if items[0].Description != "plain &lt;b&gt;bold&lt;/b&gt; text" {
+		t.Errorf("text summary = %q, want escaped literals", items[0].Description)
+	}
+}
+
+// Atom allows feed-level <author>; entries without their own author inherit it.
+func TestDecodeAtomInheritsFeedLevelAuthor(t *testing.T) {
+	const feed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Authors</title>
+  <author><name>Feed Author</name></author>
+  <entry>
+    <id>tag:example.com,2026:auth-1</id>
+    <title>No entry author</title>
+    <link href="https://example.com/auth-1"/>
+    <summary>body</summary>
+  </entry>
+  <entry>
+    <id>tag:example.com,2026:auth-2</id>
+    <title>Has entry author</title>
+    <link href="https://example.com/auth-2"/>
+    <author><name>Entry Author</name></author>
+    <summary>body</summary>
+  </entry>
+</feed>`
+	items, err := decodeFeed([]byte(feed), "https://example.com/feed.xml")
+	if err != nil {
+		t.Fatalf("decodeFeed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+	if items[0].Creator != "Feed Author" {
+		t.Errorf("inherited author = %q, want Feed Author", items[0].Creator)
+	}
+	if items[1].Creator != "Entry Author" {
+		t.Errorf("entry author = %q, want Entry Author", items[1].Creator)
+	}
+}

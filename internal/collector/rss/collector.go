@@ -207,7 +207,7 @@ func decodeFeed(data []byte, feedURL string) ([]Item, error) {
 		}
 		items := make([]Item, 0, len(feed.Entries))
 		for _, entry := range feed.Entries {
-			items = append(items, entry.toItem(feedURL, feed.XMLBase))
+			items = append(items, entry.toItem(feedURL, feed.XMLBase, feed.Authors))
 		}
 		return items, nil
 	default:
