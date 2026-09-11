@@ -646,3 +646,140 @@ func TestHashString(t *testing.T) {
 		t.Errorf("expected 8-char hash, got %d chars", len(h1))
 	}
 }
+
+// Atom XHTML text constructs nest markup under summary/content; a plain
+// string field would decode as empty and drop body text used by filters.
+const testAtomXHTMLFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>XHTML Feed</title>
+  <entry>
+    <id>tag:example.com,2026:xhtml-1</id>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><em>XHTML Title</em></div></title>
+    <link rel="alternate" href="https://example.com/xhtml-1"/>
+    <summary type="xhtml">
+      <div xmlns="http://www.w3.org/1999/xhtml"><p>Keyword artificial intelligence in summary</p></div>
+    </summary>
+    <content type="xhtml">
+      <div xmlns="http://www.w3.org/1999/xhtml"><p>Full body with machine learning</p></div>
+    </content>
+  </entry>
+  <entry>
+    <id>tag:example.com,2026:html-1</id>
+    <title>HTML Title</title>
+    <link href="https://example.com/html-1"/>
+    <content type="html">&lt;p&gt;Escaped HTML content stays intact&lt;/p&gt;</content>
+  </entry>
+</feed>`
+
+func TestDecodeAtomXHTMLTextConstructs(t *testing.T) {
+	items, err := decodeFeed([]byte(testAtomXHTMLFeed), "https://example.com/feed.xml")
+	if err != nil {
+		t.Fatalf("decodeFeed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+	if items[0].Title != "XHTML Title" {
+		t.Errorf("xhtml title = %q, want nested text", items[0].Title)
+	}
+	if !strings.Contains(items[0].Description, "artificial intelligence") {
+		t.Errorf("xhtml summary empty/lost: %q", items[0].Description)
+	}
+	if items[1].Description != "<p>Escaped HTML content stays intact</p>" {
+		t.Errorf("html content = %q", items[1].Description)
+	}
+}
+
+// Relative Atom hrefs must resolve against the feed URL / xml:base so
+// SafeLinkURL and summary fetch see absolute http(s) destinations.
+const testAtomRelativeLinkFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://feeds.example.com/base/">
+  <title>Relative Link Feed</title>
+  <entry>
+    <id>tag:example.com,2026:rel-1</id>
+    <title>Feed-base relative</title>
+    <link rel="alternate" href="articles/one"/>
+    <summary>one</summary>
+  </entry>
+  <entry xml:base="https://cdn.example.com/posts/">
+    <id>tag:example.com,2026:rel-2</id>
+    <title>Entry-base relative</title>
+    <link href="../two.html"/>
+    <summary>two</summary>
+  </entry>
+  <entry>
+    <id>tag:example.com,2026:rel-3</id>
+    <title>Retrieval-URL relative</title>
+    <link href="/root/three"/>
+    <summary>three</summary>
+  </entry>
+</feed>`
+
+func TestDecodeAtomRelativeLinks(t *testing.T) {
+	// Intentionally omit feed-level xml:base for the third case by decoding
+	// a feed whose only absolute base is the retrieval URL — covered via
+	// entry without xml:base when feed xml:base is also empty.
+	items, err := decodeFeed([]byte(testAtomRelativeLinkFeed), "https://www.example.com/rss/index.xml")
+	if err != nil {
+		t.Fatalf("decodeFeed: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("got %d items, want 3", len(items))
+	}
+	if items[0].Link != "https://feeds.example.com/base/articles/one" {
+		t.Errorf("feed xml:base resolve = %q", items[0].Link)
+	}
+	if items[1].Link != "https://cdn.example.com/two.html" {
+		t.Errorf("entry xml:base resolve = %q", items[1].Link)
+	}
+	// Absolute-path relative against feed xml:base (still present on feed).
+	if items[2].Link != "https://feeds.example.com/root/three" {
+		t.Errorf("absolute-path against feed base = %q", items[2].Link)
+	}
+}
+
+func TestResolveAtomHrefAgainstFeedURL(t *testing.T) {
+	got := resolveAtomHref("posts/a", "", "", "", "https://blog.example.com/atom.xml")
+	want := "https://blog.example.com/posts/a"
+	if got != want {
+		t.Errorf("resolveAtomHref = %q, want %q", got, want)
+	}
+	if got := resolveAtomHref("https://already.example/x", "https://ignored/"); got != "https://already.example/x" {
+		t.Errorf("absolute href mutated: %q", got)
+	}
+}
+
+func TestCollectorCollectAtomXHTMLAndRelative(t *testing.T) {
+	const feed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Mixed</title>
+  <entry>
+    <id>tag:example.com,2026:mix-1</id>
+    <title>Mixed Entry</title>
+    <link rel="alternate" href="story/1"/>
+    <summary type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>nested summary text</p></div></summary>
+  </entry>
+</feed>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/atom+xml")
+		w.Write([]byte(feed))
+	}))
+	defer server.Close()
+
+	c := newFastCollector([]Source{{Name: "Mixed", URL: server.URL + "/feeds/tech.xml"}})
+	articles, err := c.Collect(context.Background(), collector.Options{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(articles) != 1 {
+		t.Fatalf("got %d articles", len(articles))
+	}
+	if !strings.Contains(articles[0].Content, "nested summary text") {
+		t.Errorf("content missing xhtml text: %q", articles[0].Content)
+	}
+	wantURL := server.URL + "/feeds/story/1"
+	if articles[0].URL != wantURL {
+		t.Errorf("URL = %q, want %q", articles[0].URL, wantURL)
+	}
+}
+

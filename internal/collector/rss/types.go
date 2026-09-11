@@ -1,7 +1,11 @@
 // Package rss provides a collector for RSS feeds.
 package rss
 
-import "encoding/xml"
+import (
+	"encoding/xml"
+	"net/url"
+	"strings"
+)
 
 // Feed represents an RSS feed.
 type Feed struct {
@@ -32,27 +36,67 @@ type Item struct {
 // AtomFeed represents an Atom feed document (root element <feed>).
 type AtomFeed struct {
 	XMLName xml.Name    `xml:"feed"`
-	Title   string      `xml:"title"`
+	XMLBase string      `xml:"http://www.w3.org/XML/1998/namespace base,attr"`
+	Title   AtomText    `xml:"title"`
 	Entries []AtomEntry `xml:"entry"`
 }
 
 // AtomEntry represents a single entry in an Atom feed.
 type AtomEntry struct {
+	XMLBase    string         `xml:"http://www.w3.org/XML/1998/namespace base,attr"`
 	ID         string         `xml:"id"`
-	Title      string         `xml:"title"`
+	Title      AtomText       `xml:"title"`
 	Links      []AtomLink     `xml:"link"`
 	Published  string         `xml:"published"`
 	Updated    string         `xml:"updated"`
-	Summary    string         `xml:"summary"`
-	Content    string         `xml:"content"`
+	Summary    AtomText       `xml:"summary"`
+	Content    AtomText       `xml:"content"`
 	Authors    []AtomPerson   `xml:"author"`
 	Categories []AtomCategory `xml:"category"`
 }
 
+// AtomText captures an Atom text construct (title, summary, or content).
+// Plain text/html types store character data; type="xhtml" nests markup,
+// which encoding/xml would leave empty if decoded into a bare string.
+type AtomText struct {
+	Type  string
+	Value string
+}
+
+// UnmarshalXML decodes Atom text constructs, including nested XHTML bodies.
+func (t *AtomText) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	for _, attr := range start.Attr {
+		if attr.Name.Local == "type" {
+			t.Type = attr.Value
+			break
+		}
+	}
+
+	var b strings.Builder
+	depth := 1
+	for depth > 0 {
+		tok, err := d.Token()
+		if err != nil {
+			return err
+		}
+		switch v := tok.(type) {
+		case xml.StartElement:
+			depth++
+		case xml.EndElement:
+			depth--
+		case xml.CharData:
+			b.Write(v)
+		}
+	}
+	t.Value = strings.TrimSpace(b.String())
+	return nil
+}
+
 // AtomLink represents a link element in an Atom feed.
 type AtomLink struct {
-	Rel  string `xml:"rel,attr"`
-	Href string `xml:"href,attr"`
+	Rel     string `xml:"rel,attr"`
+	Href    string `xml:"href,attr"`
+	XMLBase string `xml:"http://www.w3.org/XML/1998/namespace base,attr"`
 }
 
 // AtomPerson represents an author or contributor in an Atom feed.
@@ -69,29 +113,34 @@ type AtomCategory struct {
 
 // toItem normalizes an Atom entry into the shared Item shape so that
 // article conversion and time filtering behave identically for both formats.
-func (e AtomEntry) toItem() Item {
+// feedURL is the retrieval URL used as the outermost base for relative links;
+// feedBase is the feed-level xml:base when present.
+func (e AtomEntry) toItem(feedURL, feedBase string) Item {
 	item := Item{
-		Title:       e.Title,
-		Description: e.Summary,
+		Title:       e.Title.Value,
+		Description: e.Summary.Value,
 		GUID:        e.ID,
 		PubDate:     e.Published,
 	}
 	if item.Description == "" {
-		item.Description = e.Content
+		item.Description = e.Content.Value
 	}
 	if item.PubDate == "" {
 		item.PubDate = e.Updated
 	}
 
 	// Prefer the alternate link (Atom's default rel when the attribute is
-	// absent); ignore self/enclosure/replies links.
+	// absent); ignore self/enclosure/replies links. Relative hrefs resolve
+	// against the most specific absolute base: link xml:base, entry xml:base,
+	// feed xml:base, then the retrieval URL.
 	for _, l := range e.Links {
+		href := resolveAtomHref(l.Href, l.XMLBase, e.XMLBase, feedBase, feedURL)
 		if l.Rel == "alternate" {
-			item.Link = l.Href
+			item.Link = href
 			break
 		}
 		if l.Rel == "" && item.Link == "" {
-			item.Link = l.Href
+			item.Link = href
 		}
 	}
 
@@ -112,6 +161,36 @@ func (e AtomEntry) toItem() Item {
 	}
 
 	return item
+}
+
+// resolveAtomHref turns a possibly-relative Atom link href into an absolute
+// URL using the most specific absolute base among (link xml:base, entry
+// xml:base, feed xml:base, feed retrieval URL). Absolute hrefs are returned
+// unchanged. When no absolute base is available the original href is kept.
+func resolveAtomHref(href string, bases ...string) string {
+	href = strings.TrimSpace(href)
+	if href == "" {
+		return ""
+	}
+	ref, err := url.Parse(href)
+	if err != nil {
+		return href
+	}
+	if ref.IsAbs() {
+		return ref.String()
+	}
+	for _, base := range bases {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		baseURL, err := url.Parse(base)
+		if err != nil || !baseURL.IsAbs() {
+			continue
+		}
+		return baseURL.ResolveReference(ref).String()
+	}
+	return href
 }
 
 // Source represents a configured RSS source.

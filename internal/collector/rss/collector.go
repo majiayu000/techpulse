@@ -150,7 +150,7 @@ func (c *Collector) fetchFeed(ctx context.Context, source Source, opts collector
 		return nil, fmt.Errorf("read feed body: %w", err)
 	}
 
-	items, err := decodeFeed(data)
+	items, err := decodeFeed(data, source.URL)
 	if err != nil {
 		return nil, err
 	}
@@ -173,8 +173,9 @@ func (c *Collector) fetchFeed(ctx context.Context, source Source, opts collector
 }
 
 // decodeFeed decodes an RSS or Atom document into the shared Item shape.
-// The format is detected from the document's root element name.
-func decodeFeed(data []byte) ([]Item, error) {
+// The format is detected from the document's root element name. feedURL is
+// the retrieval URL used to resolve relative Atom entry links.
+func decodeFeed(data []byte, feedURL string) ([]Item, error) {
 	root, err := rootElement(data)
 	if err != nil {
 		return nil, fmt.Errorf("inspect feed root element: %w", err)
@@ -198,7 +199,7 @@ func decodeFeed(data []byte) ([]Item, error) {
 		}
 		items := make([]Item, 0, len(feed.Entries))
 		for _, entry := range feed.Entries {
-			items = append(items, entry.toItem())
+			items = append(items, entry.toItem(feedURL, feed.XMLBase))
 		}
 		return items, nil
 	default:
