@@ -131,8 +131,8 @@ func (e AtomEntry) toItem(feedURL, feedBase string) Item {
 
 	// Prefer the alternate link (Atom's default rel when the attribute is
 	// absent); ignore self/enclosure/replies links. Relative hrefs resolve
-	// against the most specific absolute base: link xml:base, entry xml:base,
-	// feed xml:base, then the retrieval URL.
+	// against the composed xml:base chain (link → entry → feed → retrieval URL),
+	// so relative inner bases inherit from outer absolute ones.
 	for _, l := range e.Links {
 		href := resolveAtomHref(l.Href, l.XMLBase, e.XMLBase, feedBase, feedURL)
 		if l.Rel == "alternate" {
@@ -164,9 +164,11 @@ func (e AtomEntry) toItem(feedURL, feedBase string) Item {
 }
 
 // resolveAtomHref turns a possibly-relative Atom link href into an absolute
-// URL using the most specific absolute base among (link xml:base, entry
-// xml:base, feed xml:base, feed retrieval URL). Absolute hrefs are returned
-// unchanged. When no absolute base is available the original href is kept.
+// URL. bases are ordered most-specific-first (link xml:base, entry xml:base,
+// feed xml:base, feed retrieval URL). Relative xml:base values are composed
+// against outer bases per XML Base before the href is resolved. Absolute
+// hrefs are returned unchanged. When no absolute base is available the
+// original href is kept.
 func resolveAtomHref(href string, bases ...string) string {
 	href = strings.TrimSpace(href)
 	if href == "" {
@@ -179,18 +181,33 @@ func resolveAtomHref(href string, bases ...string) string {
 	if ref.IsAbs() {
 		return ref.String()
 	}
-	for _, base := range bases {
-		base = strings.TrimSpace(base)
+
+	// Walk outermost → innermost so relative inner xml:base values inherit
+	// from an absolute outer base (e.g. feed https://ex/base/ + entry posts/
+	// + href 1 → https://ex/base/posts/1).
+	var effective *url.URL
+	for i := len(bases) - 1; i >= 0; i-- {
+		base := strings.TrimSpace(bases[i])
 		if base == "" {
 			continue
 		}
 		baseURL, err := url.Parse(base)
-		if err != nil || !baseURL.IsAbs() {
+		if err != nil {
 			continue
 		}
-		return baseURL.ResolveReference(ref).String()
+		if effective == nil {
+			if !baseURL.IsAbs() {
+				continue
+			}
+			effective = baseURL
+			continue
+		}
+		effective = effective.ResolveReference(baseURL)
 	}
-	return href
+	if effective == nil {
+		return href
+	}
+	return effective.ResolveReference(ref).String()
 }
 
 // Source represents a configured RSS source.

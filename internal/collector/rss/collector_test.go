@@ -749,6 +749,47 @@ func TestResolveAtomHrefAgainstFeedURL(t *testing.T) {
 	}
 }
 
+// Relative inner xml:base must compose against outer absolute bases before
+// resolving the href (XML Base), not be skipped as non-absolute.
+func TestResolveAtomHrefNestedRelativeXMLBase(t *testing.T) {
+	got := resolveAtomHref("1", "", "posts/", "https://example.com/base/", "")
+	want := "https://example.com/base/posts/1"
+	if got != want {
+		t.Errorf("nested relative xml:base = %q, want %q", got, want)
+	}
+
+	got = resolveAtomHref("item", "nest/", "posts/", "https://example.com/base/", "https://ignored.example/feed.xml")
+	want = "https://example.com/base/posts/nest/item"
+	if got != want {
+		t.Errorf("link+entry relative xml:base = %q, want %q", got, want)
+	}
+}
+
+const testAtomNestedRelativeBaseFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://example.com/base/">
+  <title>Nested Relative Base</title>
+  <entry xml:base="posts/">
+    <id>tag:example.com,2026:nest-1</id>
+    <title>Nested</title>
+    <link rel="alternate" href="1"/>
+    <summary>one</summary>
+  </entry>
+</feed>`
+
+func TestDecodeAtomNestedRelativeXMLBase(t *testing.T) {
+	items, err := decodeFeed([]byte(testAtomNestedRelativeBaseFeed), "https://www.example.com/rss/index.xml")
+	if err != nil {
+		t.Fatalf("decodeFeed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	want := "https://example.com/base/posts/1"
+	if items[0].Link != want {
+		t.Errorf("nested relative xml:base decode = %q, want %q", items[0].Link, want)
+	}
+}
+
 func TestCollectorCollectAtomXHTMLAndRelative(t *testing.T) {
 	const feed = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
@@ -782,4 +823,3 @@ func TestCollectorCollectAtomXHTMLAndRelative(t *testing.T) {
 		t.Errorf("URL = %q, want %q", articles[0].URL, wantURL)
 	}
 }
-
