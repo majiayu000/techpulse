@@ -62,3 +62,36 @@ func TestStreamOutput_ConcurrentSafeCollection(t *testing.T) {
 		t.Fatalf("expected stderr lines preserved, got %q", out)
 	}
 }
+
+func TestStreamOutput_LargeJSONLineBeyondScannerDefault(t *testing.T) {
+	r := &Runner{}
+	var buf strings.Builder
+	pr, pw := io.Pipe()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.streamOutput(pr, &buf)
+	}()
+
+	// Exceed bufio.Scanner's default 64 KiB token limit.
+	payload := `{"total_cost_usd":2.5,"blob":"` + strings.Repeat("x", 70*1024) + `"}` + "\n"
+	go func() {
+		defer pw.Close()
+		io.WriteString(pw, payload)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for large-line reader")
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `"total_cost_usd":2.5`) {
+		t.Fatalf("expected large JSON line preserved, got len=%d", len(out))
+	}
+	if strings.Contains(out, "[streamOutput error:") {
+		t.Fatalf("unexpected stream error for large line: %q", out)
+	}
+}

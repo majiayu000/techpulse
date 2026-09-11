@@ -170,16 +170,23 @@ func (r *Runner) Run(ctx context.Context) *Result {
 	return result
 }
 
-// streamOutput 流式读取输出
+// streamOutput drains a pipe with an unbounded line reader so large Claude
+// JSON records are not truncated by bufio.Scanner's default 64 KiB limit.
 func (r *Runner) streamOutput(pipe io.Reader, output *strings.Builder) {
-	scanner := bufio.NewScanner(pipe)
-	for scanner.Scan() {
-		line := scanner.Text()
-		output.WriteString(line)
-		output.WriteString("\n")
-
-		if r.onOutput != nil {
-			r.onOutput(line)
+	reader := bufio.NewReader(pipe)
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			output.WriteString(line)
+			if r.onOutput != nil {
+				r.onOutput(strings.TrimRight(line, "\r\n"))
+			}
+		}
+		if err != nil {
+			if err != io.EOF {
+				fmt.Fprintf(output, "\n[streamOutput error: %v]\n", err)
+			}
+			return
 		}
 	}
 }

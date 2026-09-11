@@ -148,6 +148,81 @@ func TestGitDetector_DirtyPathContentEditIsProgress(t *testing.T) {
 	}
 }
 
+func TestGitDetector_UntrackedDirNestedEditIsProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	dir := filepath.Join(tmpDir, "newdir")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	nested := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(nested, []byte("v1"), 0644); err != nil {
+		t.Fatalf("write nested: %v", err)
+	}
+	if err := gd.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	// Edit under an already-untracked directory; default porcelain only shows ?? newdir/.
+	if err := os.WriteFile(nested, []byte("v2-nested-edit"), 0644); err != nil {
+		t.Fatalf("edit nested: %v", err)
+	}
+	hasProgress, err := gd.Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !hasProgress {
+		t.Fatal("expected progress when a file under a dirty untracked directory changes")
+	}
+}
+
+func TestGitDetector_IgnorePathsExcludesLog(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	logPath := filepath.Join(tmpDir, "orchestrator_test.log")
+	if err := os.WriteFile(logPath, []byte("start\n"), 0644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	gd.IgnorePaths(logPath)
+	if err := gd.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if err := os.WriteFile(logPath, []byte("start\niteration done\n"), 0644); err != nil {
+		t.Fatalf("append log: %v", err)
+	}
+	hasProgress, err := gd.Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if hasProgress {
+		t.Fatal("expected no progress when only an ignored log file changes")
+	}
+
+	// A real workspace edit should still count.
+	if err := gd.Reset(); err != nil {
+		t.Fatalf("second Reset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "real.txt"), []byte("work"), 0644); err != nil {
+		t.Fatalf("write real: %v", err)
+	}
+	hasProgress, err = gd.Detect()
+	if err != nil {
+		t.Fatalf("Detect after real edit: %v", err)
+	}
+	if !hasProgress {
+		t.Fatal("expected progress for non-ignored workspace edits")
+	}
+}
+
 func TestGitDetector_RejectsAncestorRepo(t *testing.T) {
 	parent := t.TempDir()
 	parentGD, err := NewGitDetector(parent)

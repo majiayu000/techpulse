@@ -105,6 +105,8 @@ func run() int {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: git detector disabled: %v\n", err)
 		} else {
+			// Operational logs must not reset consecutive_no_progress.
+			gitDet.IgnorePaths(logPath)
 			detectors = append(detectors, gitDet)
 		}
 	}
@@ -249,13 +251,30 @@ func run() int {
 		}
 
 		if cfg.CooldownDuration > 0 {
-			printf("cooldown %s...\n", cfg.CooldownDuration)
+			cooldown := cfg.CooldownDuration
+			durationLimited := false
+			if cfg.MaxDuration > 0 {
+				remaining := cfg.MaxDuration - time.Since(start)
+				if remaining <= 0 {
+					stopReason = "max_duration"
+					break
+				}
+				if cooldown > remaining {
+					cooldown = remaining
+					durationLimited = true
+				}
+			}
+			printf("cooldown %s...\n", cooldown)
 			timer := time.NewTicker(100 * time.Millisecond)
-			deadline := time.Now().Add(cfg.CooldownDuration)
+			deadline := time.Now().Add(cooldown)
 			interrupted := false
 			for time.Now().Before(deadline) {
 				if stopRequested.Load() {
 					interrupted = true
+					break
+				}
+				if cfg.MaxDuration > 0 && time.Since(start) >= cfg.MaxDuration {
+					durationLimited = true
 					break
 				}
 				<-timer.C
@@ -263,6 +282,10 @@ func run() int {
 			timer.Stop()
 			if interrupted {
 				stopReason = "signal"
+				break
+			}
+			if durationLimited || (cfg.MaxDuration > 0 && time.Since(start) >= cfg.MaxDuration) {
+				stopReason = "max_duration"
 				break
 			}
 		}

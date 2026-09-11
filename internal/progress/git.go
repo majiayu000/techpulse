@@ -23,6 +23,7 @@ type GitDetector struct {
 	statusChanged   bool
 	contentChanged  bool
 	commitChanged   bool
+	ignorePaths     map[string]bool // workspace-relative paths excluded from progress
 }
 
 // NewGitDetector 创建 Git 检测器
@@ -51,6 +52,29 @@ func NewGitDetector(workspaceDir string) (*GitDetector, error) {
 
 func (g *GitDetector) Name() string {
 	return "git"
+}
+
+// IgnorePaths excludes workspace-relative operational files (e.g. the active
+// orchestrator log) from status/content fingerprints so they do not reset
+// consecutive_no_progress. Paths outside the workspace are ignored.
+func (g *GitDetector) IgnorePaths(paths ...string) {
+	if g.ignorePaths == nil {
+		g.ignorePaths = make(map[string]bool)
+	}
+	for _, p := range paths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(g.workspaceDir, abs)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		g.ignorePaths[filepath.ToSlash(rel)] = true
+	}
+	// Refresh baseline so ignored paths are dropped immediately.
+	g.baselineStatus = g.getStatusPorcelain()
+	g.baselineContent = g.getContentFingerprint(g.baselineStatus)
 }
 
 func (g *GitDetector) Detect() (bool, error) {
@@ -173,15 +197,61 @@ func (g *GitDetector) getCurrentCommit() string {
 	return strings.TrimSpace(string(output))
 }
 
-// getStatusPorcelain 返回稳定的 git status --porcelain 快照
+// getStatusPorcelain returns a stable git status --porcelain snapshot.
+// --untracked-files=all enumerates files under untracked directories so edits
+// beneath an existing dirty directory change the fingerprint.
 func (g *GitDetector) getStatusPorcelain() string {
-	cmd := exec.Command("git", "status", "--porcelain")
+	cmd := exec.Command("git", "status", "--porcelain", "--untracked-files=all")
 	cmd.Dir = g.workspaceDir
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
-	return string(output)
+	return g.filterIgnoredStatus(string(output))
+}
+
+func (g *GitDetector) filterIgnoredStatus(status string) string {
+	if len(g.ignorePaths) == 0 {
+		return status
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(status, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		if len(line) < 4 {
+			b.WriteString(line)
+			b.WriteByte('\n')
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if i := strings.Index(path, " -> "); i >= 0 {
+			path = path[i+4:]
+		}
+		if g.isIgnored(path) {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func (g *GitDetector) isIgnored(relPath string) bool {
+	if len(g.ignorePaths) == 0 {
+		return false
+	}
+	rel := filepath.ToSlash(relPath)
+	if g.ignorePaths[rel] {
+		return true
+	}
+	for ignored := range g.ignorePaths {
+		if strings.HasPrefix(rel, ignored+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // getContentFingerprint hashes working-tree contents of every dirty path so
@@ -202,13 +272,52 @@ func (g *GitDetector) getContentFingerprint(status string) string {
 }
 
 func (g *GitDetector) hashWorkspaceFile(relPath string) string {
-	data, err := os.ReadFile(filepath.Join(g.workspaceDir, relPath))
+	full := filepath.Join(g.workspaceDir, relPath)
+	info, err := os.Lstat(full)
 	if err != nil {
 		// Missing path (deleted) still contributes a stable sentinel.
 		return "missing:" + err.Error()
 	}
+	if info.IsDir() {
+		return g.hashDirectory(full)
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return "missing:" + err.Error()
+	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// hashDirectory recursively fingerprints file contents under a dirty directory
+// entry (fallback when porcelain still reports a directory path).
+func (g *GitDetector) hashDirectory(dir string) string {
+	h := sha256.New()
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(g.workspaceDir, path)
+		if err != nil {
+			return nil
+		}
+		relSlash := filepath.ToSlash(rel)
+		if g.isIgnored(relSlash) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(h, "%s\tmissing:%s\n", relSlash, err.Error())
+			return nil
+		}
+		sum := sha256.Sum256(data)
+		fmt.Fprintf(h, "%s\t%s\n", relSlash, hex.EncodeToString(sum[:]))
+		return nil
+	})
+	return "dir:" + hex.EncodeToString(h.Sum(nil))
 }
 
 // checkUntracked 检查是否有未追踪文件
