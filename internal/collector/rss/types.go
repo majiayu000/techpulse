@@ -126,8 +126,9 @@ func writeAtomXHTMLSeparator(b *strings.Builder) {
 // normalizeAtomText turns Atom text constructs into plain text according to
 // their declared type. text (and the omitted default) escapes angle brackets
 // so entity-decoded markup stays literal in Markdown; html strips tags after
-// XML entity decoding; xhtml uses CharData from nested markup and collapses
-// residual whitespace.
+// XML entity decoding then re-escapes so UnescapeString cannot reintroduce
+// active brackets; xhtml uses CharData from nested markup, collapses
+// residual whitespace, and escapes the same way.
 func normalizeAtomText(typ, value string) string {
 	switch strings.ToLower(strings.TrimSpace(typ)) {
 	case "", "text", "text/plain":
@@ -137,13 +138,17 @@ func normalizeAtomText(typ, value string) string {
 		return html.EscapeString(value)
 	case "html", "text/html":
 		// encoding/xml already decoded &lt;p&gt;… into <p>…; strip tags and
-		// unescape any remaining entities so Markdown sees plain text.
+		// unescape remaining entities (e.g. &amp;lt; → <), then escape so
+		// those brackets cannot become active HTML in digests.
 		plain := atomHTMLTagRe.ReplaceAllString(value, " ")
 		plain = html.UnescapeString(plain)
-		return strings.Join(strings.Fields(plain), " ")
+		plain = strings.Join(strings.Fields(plain), " ")
+		return html.EscapeString(plain)
 	case "xhtml", "application/xhtml+xml":
-		// Nested XHTML contributes CharData only; collapse whitespace.
-		return strings.Join(strings.Fields(value), " ")
+		// Nested XHTML CharData is already entity-decoded; collapse
+		// whitespace then escape so literal <…> in text nodes stay inert.
+		plain := strings.Join(strings.Fields(value), " ")
+		return html.EscapeString(plain)
 	default:
 		return html.EscapeString(value)
 	}

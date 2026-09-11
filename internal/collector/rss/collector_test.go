@@ -929,6 +929,52 @@ func TestDecodeAtomTextEscapesLiteralMarkup(t *testing.T) {
 	}
 }
 
+// type=html UnescapeString after tag strip, and type=xhtml entity-decoded
+// CharData, must not leave raw angle brackets in digest-bound plain text.
+func TestDecodeAtomHTMLAndXHTMLEscapeAngleBrackets(t *testing.T) {
+	const feed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>HTML/XHTML Escape</title>
+  <entry>
+    <id>tag:example.com,2026:html-esc-1</id>
+    <title type="html">&lt;p&gt;Hello &amp;lt;world&amp;gt;&lt;/p&gt;</title>
+    <link href="https://example.com/html-esc-1"/>
+    <summary type="html">&lt;div&gt;see &amp;lt;img src=x&amp;gt; here&lt;/div&gt;</summary>
+  </entry>
+  <entry>
+    <id>tag:example.com,2026:xhtml-esc-1</id>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><em>safe</em></div></title>
+    <link href="https://example.com/xhtml-esc-1"/>
+    <summary type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>see &lt;b&gt;bold&lt;/b&gt; text</p></div></summary>
+  </entry>
+</feed>`
+	items, err := decodeFeed([]byte(feed), "https://example.com/feed.xml")
+	if err != nil {
+		t.Fatalf("decodeFeed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+	if strings.ContainsAny(items[0].Title, "<>") {
+		t.Errorf("html title still has raw brackets: %q", items[0].Title)
+	}
+	if items[0].Title != "Hello &lt;world&gt;" {
+		t.Errorf("html title = %q, want escaped literals after strip+unescape", items[0].Title)
+	}
+	if strings.ContainsAny(items[0].Description, "<>") {
+		t.Errorf("html summary still has raw brackets: %q", items[0].Description)
+	}
+	if !strings.Contains(items[0].Description, "&lt;img") {
+		t.Errorf("html summary = %q, want escaped img literal", items[0].Description)
+	}
+	if strings.ContainsAny(items[1].Description, "<>") {
+		t.Errorf("xhtml summary still has raw brackets: %q", items[1].Description)
+	}
+	if items[1].Description != "see &lt;b&gt;bold&lt;/b&gt; text" {
+		t.Errorf("xhtml summary = %q, want escaped CharData literals", items[1].Description)
+	}
+}
+
 // Atom allows feed-level <author>; entries without their own author inherit it.
 func TestDecodeAtomInheritsFeedLevelAuthor(t *testing.T) {
 	const feed = `<?xml version="1.0" encoding="UTF-8"?>
