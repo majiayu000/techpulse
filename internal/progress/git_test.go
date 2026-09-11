@@ -79,6 +79,47 @@ func TestGitDetector_DetectWithNewFile(t *testing.T) {
 	}
 }
 
+func TestGitDetector_PersistentDirtyIsNotProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+	gd, err := NewGitDetector(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitDetector failed: %v", err)
+	}
+
+	dirty := filepath.Join(tmpDir, "leftover.txt")
+	if err := os.WriteFile(dirty, []byte("stale"), 0644); err != nil {
+		t.Fatalf("failed to create dirty file: %v", err)
+	}
+
+	// Baseline includes the dirty file; unchanged dirty state must not look like progress.
+	if err := gd.Reset(); err != nil {
+		t.Fatalf("Reset failed: %v", err)
+	}
+	hasProgress, err := gd.Detect()
+	if err != nil {
+		t.Fatalf("Detect failed: %v", err)
+	}
+	if hasProgress {
+		t.Fatal("expected no progress when dirty files are unchanged since Reset")
+	}
+
+	// A new path in the status snapshot after Reset should count as progress.
+	if err := gd.Reset(); err != nil {
+		t.Fatalf("second Reset failed: %v", err)
+	}
+	extra := filepath.Join(tmpDir, "extra.txt")
+	if err := os.WriteFile(extra, []byte("new"), 0644); err != nil {
+		t.Fatalf("failed to create extra file: %v", err)
+	}
+	hasProgress, err = gd.Detect()
+	if err != nil {
+		t.Fatalf("Detect after change failed: %v", err)
+	}
+	if !hasProgress {
+		t.Fatal("expected progress when git status gains a new path after Reset")
+	}
+}
+
 func TestGitDetector_Reset(t *testing.T) {
 	wd, _ := os.Getwd()
 	gd, err := NewGitDetector(wd)

@@ -8,11 +8,14 @@ import (
 
 // GitDetector 基于 Git 检测代码变化
 type GitDetector struct {
-	workspaceDir  string
-	lastCommit    string
-	hasUntracked  bool
-	hasModified   bool
-	changedFiles  []string
+	workspaceDir   string
+	lastCommit     string
+	baselineStatus string // porcelain snapshot taken at Reset
+	hasUntracked   bool
+	hasModified    bool
+	changedFiles   []string
+	statusChanged  bool
+	commitChanged  bool
 }
 
 // NewGitDetector 创建 Git 检测器
@@ -27,8 +30,9 @@ func NewGitDetector(workspaceDir string) (*GitDetector, error) {
 		}
 	}
 
-	// 获取当前 commit
+	// 获取当前 commit 与初始状态快照
 	g.lastCommit = g.getCurrentCommit()
+	g.baselineStatus = g.getStatusPorcelain()
 
 	return g, nil
 }
@@ -38,22 +42,19 @@ func (g *GitDetector) Name() string {
 }
 
 func (g *GitDetector) Detect() (bool, error) {
-	// 检查未追踪文件
-	g.hasUntracked = g.checkUntracked()
-
-	// 检查已修改文件
-	g.hasModified = g.checkModified()
-
-	// 检查新 commit
+	currentStatus := g.getStatusPorcelain()
 	currentCommit := g.getCurrentCommit()
-	newCommit := currentCommit != g.lastCommit && currentCommit != ""
 
-	// 获取变更文件列表
-	g.changedFiles = g.getChangedFiles()
+	g.commitChanged = currentCommit != g.lastCommit && currentCommit != ""
+	g.statusChanged = currentStatus != g.baselineStatus
 
-	hasProgress := g.hasUntracked || g.hasModified || newCommit
+	g.hasUntracked = g.checkUntracked()
+	g.hasModified = g.checkModified()
+	g.changedFiles = g.diffStatusFiles(g.baselineStatus, currentStatus)
 
-	if newCommit {
+	hasProgress := g.statusChanged || g.commitChanged
+
+	if g.commitChanged {
 		g.lastCommit = currentCommit
 	}
 
@@ -62,19 +63,27 @@ func (g *GitDetector) Detect() (bool, error) {
 
 func (g *GitDetector) Reset() error {
 	g.lastCommit = g.getCurrentCommit()
+	g.baselineStatus = g.getStatusPorcelain()
 	g.hasUntracked = false
 	g.hasModified = false
 	g.changedFiles = nil
+	g.statusChanged = false
+	g.commitChanged = false
 	return nil
 }
 
 func (g *GitDetector) Details() string {
 	var parts []string
-	if g.hasUntracked {
-		parts = append(parts, "新文件")
+	if g.commitChanged {
+		parts = append(parts, "新 commit")
 	}
-	if g.hasModified {
-		parts = append(parts, "已修改")
+	if g.statusChanged {
+		if g.hasUntracked {
+			parts = append(parts, "新文件")
+		}
+		if g.hasModified {
+			parts = append(parts, "已修改")
+		}
 	}
 	if len(g.changedFiles) > 0 {
 		files := g.changedFiles
@@ -127,6 +136,17 @@ func (g *GitDetector) getCurrentCommit() string {
 	return strings.TrimSpace(string(output))
 }
 
+// getStatusPorcelain 返回稳定的 git status --porcelain 快照
+func (g *GitDetector) getStatusPorcelain() string {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = g.workspaceDir
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(output)
+}
+
 // checkUntracked 检查是否有未追踪文件
 func (g *GitDetector) checkUntracked() bool {
 	cmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
@@ -146,27 +166,54 @@ func (g *GitDetector) checkModified() bool {
 	if err != nil {
 		return false
 	}
-	return len(strings.TrimSpace(string(output))) > 0
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		// Untracked entries start with "??"; anything else is a tracked change.
+		if !strings.HasPrefix(line, "??") {
+			return true
+		}
+	}
+	return false
 }
 
-// getChangedFiles 获取变更文件列表
-func (g *GitDetector) getChangedFiles() []string {
-	cmd := exec.Command("git", "status", "--porcelain")
-	cmd.Dir = g.workspaceDir
-	output, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-
+// diffStatusFiles returns file paths that differ between two porcelain snapshots.
+func (g *GitDetector) diffStatusFiles(before, after string) []string {
+	beforeSet := porcelainFiles(before)
+	afterSet := porcelainFiles(after)
 	var files []string
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if len(line) > 3 {
-			files = append(files, line[3:])
+	for f := range afterSet {
+		if !beforeSet[f] {
+			files = append(files, f)
+		}
+	}
+	for f := range beforeSet {
+		if !afterSet[f] {
+			files = append(files, f+" (removed)")
 		}
 	}
 	return files
+}
+
+func porcelainFiles(status string) map[string]bool {
+	out := make(map[string]bool)
+	for _, line := range strings.Split(status, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if len(line) < 4 {
+			continue
+		}
+		// Porcelain: XY␠path or XY␠orig -> path
+		path := strings.TrimSpace(line[3:])
+		if i := strings.Index(path, " -> "); i >= 0 {
+			path = path[i+4:]
+		}
+		if path != "" {
+			out[path] = true
+		}
+	}
+	return out
 }
 
 // CreateCheckpoint 创建检查点（自动 commit）

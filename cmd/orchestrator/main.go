@@ -6,9 +6,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -42,14 +44,22 @@ func run() int {
 		return 1
 	}
 
-	// CLI overrides (run.sh always passes these; 0 means unlimited)
-	cfg.MaxIterations = *maxIterations
-	cfg.MaxCostUSD = *maxCost
-	if *maxDurationHours <= 0 {
-		cfg.MaxDuration = 0
-	} else {
-		cfg.MaxDuration = time.Duration(*maxDurationHours * float64(time.Hour))
-	}
+	// Only apply CLI overrides for flags that were explicitly supplied so
+	// config.yaml limits are preserved when the binary is invoked bare.
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "max-iterations":
+			cfg.MaxIterations = *maxIterations
+		case "max-cost":
+			cfg.MaxCostUSD = *maxCost
+		case "max-duration":
+			if *maxDurationHours <= 0 {
+				cfg.MaxDuration = 0
+			} else {
+				cfg.MaxDuration = time.Duration(*maxDurationHours * float64(time.Hour))
+			}
+		}
+	})
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "validate config: %v\n", err)
 		return 1
@@ -64,6 +74,18 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "create dir %s: %v\n", d, err)
 			return 1
 		}
+	}
+
+	logPath := filepath.Join(logDir, fmt.Sprintf("orchestrator_%s.log", time.Now().Format("20060102_150405")))
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open log file: %v\n", err)
+		return 1
+	}
+	defer logFile.Close()
+	out := io.MultiWriter(os.Stdout, logFile)
+	printf := func(format string, args ...any) {
+		fmt.Fprintf(out, format, args...)
 	}
 
 	mem, err := memory.NewManager(memoryDir)
@@ -90,17 +112,27 @@ func run() int {
 
 	runner := worker.NewRunner(mem, workspaceDir, cfg.WorkerTimeout)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// Graceful shutdown: signal stops further iterations but does not cancel
+	// the active worker (README: Ctrl+C finishes the current task first).
+	var stopRequested atomic.Bool
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		<-sigCh
+		stopRequested.Store(true)
+		printf("\nsignal received — finishing current iteration, then stopping\n")
+	}()
 
-	fmt.Printf("Autonomous Runner starting\n")
-	fmt.Printf("  project:     %s\n", projectDir)
-	fmt.Printf("  memory:      %s\n", memoryDir)
-	fmt.Printf("  workspace:   %s\n", workspaceDir)
-	fmt.Printf("  max iter:    %s\n", limitInt(cfg.MaxIterations))
-	fmt.Printf("  max cost:    %s\n", limitFloat(cfg.MaxCostUSD))
-	fmt.Printf("  max duration:%s\n", limitDuration(cfg.MaxDuration))
-	fmt.Println()
+	printf("Autonomous Runner starting\n")
+	printf("  project:     %s\n", projectDir)
+	printf("  memory:      %s\n", memoryDir)
+	printf("  workspace:   %s\n", workspaceDir)
+	printf("  log file:    %s\n", logPath)
+	printf("  max iter:    %s\n", limitInt(cfg.MaxIterations))
+	printf("  max cost:    %s\n", limitFloat(cfg.MaxCostUSD))
+	printf("  max duration:%s\n", limitDuration(cfg.MaxDuration))
+	printf("\n")
 
 	start := time.Now()
 	var (
@@ -114,7 +146,7 @@ func run() int {
 	)
 
 	for {
-		if ctx.Err() != nil {
+		if stopRequested.Load() {
 			stopReason = "signal"
 			break
 		}
@@ -143,19 +175,35 @@ func run() int {
 			}
 		}
 
+		// Enforce MaxDuration on the active worker; do not tie worker lifetime
+		// to the signal channel so graceful shutdown can finish the iteration.
+		runCtx := context.Background()
+		var cancel context.CancelFunc
+		if cfg.MaxDuration > 0 {
+			remaining := cfg.MaxDuration - time.Since(start)
+			if remaining <= 0 {
+				stopReason = "max_duration"
+				break
+			}
+			runCtx, cancel = context.WithTimeout(context.Background(), remaining)
+		}
+
 		iterations++
-		fmt.Printf("--- iteration %d ---\n", iterations)
+		printf("--- iteration %d ---\n", iterations)
 
 		if err := multi.Reset(); err != nil {
 			fmt.Fprintf(os.Stderr, "reset detectors: %v\n", err)
 		}
 
-		result := runner.Run(ctx)
+		result := runner.Run(runCtx)
+		if cancel != nil {
+			cancel()
+		}
 		totalCost += result.Cost
 		totalTokens += result.Tokens
 		if result.Success {
 			successCount++
-			fmt.Printf("worker ok  cost=$%.4f tokens=%d duration=%s\n",
+			printf("worker ok  cost=$%.4f tokens=%d duration=%s\n",
 				result.Cost, result.Tokens, result.Duration.Round(time.Millisecond))
 		} else {
 			failCount++
@@ -163,7 +211,7 @@ func run() int {
 			if result.Error != nil {
 				errMsg = result.Error.Error()
 			}
-			fmt.Printf("worker fail type=%s err=%s\n", result.ErrorType, errMsg)
+			printf("worker fail type=%s err=%s\n", result.ErrorType, errMsg)
 		}
 
 		prog, err := multi.Detect()
@@ -171,10 +219,10 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "progress detect: %v\n", err)
 		} else if prog != nil && prog.HasProgress {
 			noProgressCount = 0
-			fmt.Printf("progress: yes (%s) %s\n", prog.Source, prog.Details)
+			printf("progress: yes (%s) %s\n", prog.Source, prog.Details)
 		} else {
 			noProgressCount++
-			fmt.Printf("progress: no (%d consecutive)\n", noProgressCount)
+			printf("progress: no (%d consecutive)\n", noProgressCount)
 		}
 
 		if cfg.ConsecutiveNoProgress > 0 && noProgressCount >= cfg.ConsecutiveNoProgress {
@@ -186,36 +234,55 @@ func run() int {
 			stopReason = "max_cost"
 			break
 		}
-		if ctx.Err() != nil {
+		if stopRequested.Load() {
 			stopReason = "signal"
+			break
+		}
+		// Skip cooldown when another iteration is not allowed.
+		if cfg.MaxIterations > 0 && iterations >= cfg.MaxIterations {
+			stopReason = "max_iterations"
+			break
+		}
+		if cfg.MaxDuration > 0 && time.Since(start) >= cfg.MaxDuration {
+			stopReason = "max_duration"
 			break
 		}
 
 		if cfg.CooldownDuration > 0 {
-			fmt.Printf("cooldown %s...\n", cfg.CooldownDuration)
-			timer := time.NewTimer(cfg.CooldownDuration)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
+			printf("cooldown %s...\n", cfg.CooldownDuration)
+			timer := time.NewTicker(100 * time.Millisecond)
+			deadline := time.Now().Add(cfg.CooldownDuration)
+			interrupted := false
+			for time.Now().Before(deadline) {
+				if stopRequested.Load() {
+					interrupted = true
+					break
+				}
+				<-timer.C
+			}
+			timer.Stop()
+			if interrupted {
 				stopReason = "signal"
-				goto done
-			case <-timer.C:
+				break
 			}
 		}
 	}
 
-done:
 	elapsed := time.Since(start).Round(time.Second)
-	fmt.Println()
-	fmt.Println("========== run summary ==========")
-	fmt.Printf("stop reason:  %s\n", stopReason)
-	fmt.Printf("iterations:   %d (ok=%d fail=%d)\n", iterations, successCount, failCount)
-	fmt.Printf("total cost:   $%.4f\n", totalCost)
-	fmt.Printf("total tokens: %d\n", totalTokens)
-	fmt.Printf("elapsed:      %s\n", elapsed)
-	fmt.Println("=================================")
+	printf("\n")
+	printf("========== run summary ==========\n")
+	printf("stop reason:  %s\n", stopReason)
+	printf("iterations:   %d (ok=%d fail=%d)\n", iterations, successCount, failCount)
+	printf("total cost:   $%.4f\n", totalCost)
+	printf("total tokens: %d\n", totalTokens)
+	printf("elapsed:      %s\n", elapsed)
+	printf("=================================\n")
 
 	if stopReason == "error" {
+		return 1
+	}
+	// Nonzero when the run produced only worker failures (no successful work).
+	if successCount == 0 && failCount > 0 {
 		return 1
 	}
 	return 0
