@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anthropic/autonomous-runner/internal/collector/rss"
+	"github.com/majiayu000/techpulse/internal/collector/rss"
 )
 
 func TestLoadConfigFile(t *testing.T) {
