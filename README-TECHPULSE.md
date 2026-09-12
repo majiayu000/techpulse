@@ -119,7 +119,7 @@ keywords:
     - NFT
     - blockchain
 
-# Custom RSS feeds
+# Custom RSS feeds (optional, adds to defaults)
 # rss_feeds:
 #   - name: My Feed
 #     url: https://example.com/feed.xml

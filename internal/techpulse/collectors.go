@@ -27,15 +27,20 @@ func buildRegistry(cfg Config) *collector.Registry {
 	return reg
 }
 
-// buildRSSCollector creates RSS collector with optional custom feeds.
+// mergeRSSSources returns default RSS sources with optional custom feeds appended.
+func mergeRSSSources(custom []RSSFeedConfig) []rss.Source {
+	sources := make([]rss.Source, 0, len(rss.DefaultSources)+len(custom))
+	sources = append(sources, rss.DefaultSources...)
+	for _, f := range custom {
+		sources = append(sources, rss.Source{Name: f.Name, URL: f.URL})
+	}
+	return sources
+}
+
+// buildRSSCollector creates RSS collector with optional custom feeds appended to defaults.
 func buildRSSCollector(custom []RSSFeedConfig) *rss.Collector {
 	if len(custom) == 0 {
 		return rss.NewWithDefaults()
 	}
-
-	sources := make([]rss.Source, len(custom))
-	for i, f := range custom {
-		sources[i] = rss.Source{Name: f.Name, URL: f.URL}
-	}
-	return rss.New(sources)
+	return rss.New(mergeRSSSources(custom))
 }
