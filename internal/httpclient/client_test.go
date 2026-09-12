@@ -266,7 +266,7 @@ func TestDoWithRetryDoesNotRetryCanceledContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:   3,
 		InitialDelay: 10 * time.Millisecond,
 		MaxDelay:     50 * time.Millisecond,
