@@ -3,23 +3,28 @@ package github
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/httpclient"
 )
 
 const defaultBaseURL = "https://github.com"
+
+// minTrendingPageSize is the minimum body size (in bytes) at which a
+// zero-repo parse result is treated as a markup change rather than a
+// legitimately empty trending page.
+const minTrendingPageSize = 10 * 1024
 
 // Collector collects trending repositories from GitHub.
 type Collector struct {
 	httpClient *http.Client
 	baseURL    string
 	parser     *Parser
-	period     string   // daily, weekly, monthly
-	language   string   // programming language filter
+	period     string // daily, weekly, monthly
+	language   string // programming language filter
 }
 
 // New creates a new GitHub Trending collector with default settings.
@@ -49,6 +54,13 @@ func NewWithBaseURL(baseURL string) *Collector {
 	}
 }
 
+// SetHTTPTimeout sets the per-request timeout on the underlying HTTP client.
+func (c *Collector) SetHTTPTimeout(d time.Duration) {
+	if d > 0 {
+		c.httpClient.Timeout = d
+	}
+}
+
 // Name returns the collector's unique name.
 func (c *Collector) Name() string {
 	if c.language != "" {
@@ -72,7 +84,14 @@ func (c *Collector) Collect(ctx context.Context, opts collector.Options) ([]coll
 		return nil, fmt.Errorf("fetch trending page: %w", err)
 	}
 
-	repos := c.parser.Parse(html)
+	repos, err := c.parser.Parse(html)
+	if err != nil {
+		return nil, fmt.Errorf("parse trending page: %w", err)
+	}
+
+	if len(repos) == 0 && len(html) > minTrendingPageSize {
+		return nil, fmt.Errorf("trending page fetched (%d bytes) but 0 repos parsed - markup may have changed", len(html))
+	}
 
 	// Apply limit
 	limit := opts.Limit
@@ -106,7 +125,7 @@ func (c *Collector) fetchTrendingPage(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpclient.ReadLimited(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read response: %w", err)
 	}

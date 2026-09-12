@@ -8,13 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
-	"github.com/anthropic/autonomous-runner/internal/collector/hackernews"
-	"github.com/anthropic/autonomous-runner/internal/collector/rss"
-	"github.com/anthropic/autonomous-runner/internal/filter"
-	"github.com/anthropic/autonomous-runner/internal/logger"
-	"github.com/anthropic/autonomous-runner/internal/storage"
-	"github.com/anthropic/autonomous-runner/internal/summarizer"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector/hackernews"
+	"github.com/majiayu000/techpulse/internal/collector/rss"
+	"github.com/majiayu000/techpulse/internal/filter"
+	"github.com/majiayu000/techpulse/internal/logger"
+	"github.com/majiayu000/techpulse/internal/storage"
+	"github.com/majiayu000/techpulse/internal/summarizer"
 )
 
 // TestIntegrationFullPipeline tests the complete data flow.

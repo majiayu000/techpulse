@@ -5,8 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/httpclient"
+	"github.com/majiayu000/techpulse/internal/httpclient"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -96,7 +97,12 @@ func TestExtract_FetchDisabled(t *testing.T) {
 }
 
 func TestExtract_FailedFetchReturnsEmpty(t *testing.T) {
-	client := httpclient.New()
+	// Tiny retry backoff: exercise the real retry path without sleeping
+	// through the default 500ms-10s schedule.
+	retryCfg := httpclient.DefaultRetryConfig()
+	retryCfg.InitialDelay = time.Millisecond
+	retryCfg.MaxDelay = 5 * time.Millisecond
+	client := httpclient.New(httpclient.WithRetryConfig(retryCfg))
 	ext := NewDefault(client)
 
 	// Use invalid URL that will fail

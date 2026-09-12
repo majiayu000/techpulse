@@ -1,7 +1,7 @@
 # TechPulse Makefile
 # Provides common development commands
 
-.PHONY: build test test-cover test-cover-html clean lint help
+.PHONY: build build-release test test-cover test-cover-report test-cover-html test-module fmt vet lint run run-daemon clean help
 
 # Go parameters
 GOCMD=go
@@ -15,9 +15,9 @@ COVER_FILE=coverage.out
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "1.0.0")
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-LDFLAGS := -ldflags "-X github.com/anthropic/autonomous-runner/internal/techpulse.Version=$(VERSION) \
-	-X github.com/anthropic/autonomous-runner/internal/techpulse.BuildDate=$(BUILD_DATE) \
-	-X github.com/anthropic/autonomous-runner/internal/techpulse.GitCommit=$(GIT_COMMIT)"
+LDFLAGS := -ldflags "-X github.com/majiayu000/techpulse/internal/techpulse.Version=$(VERSION) \
+	-X github.com/majiayu000/techpulse/internal/techpulse.BuildDate=$(BUILD_DATE) \
+	-X github.com/majiayu000/techpulse/internal/techpulse.GitCommit=$(GIT_COMMIT)"
 
 # Build the binary (simple, for development)
 build:
@@ -27,20 +27,20 @@ build:
 build-release:
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) ./cmd/techpulse
 
-# Run all tests
+# Run all tests (including cmd/techpulse CLI tests)
 test:
-	$(GOTEST) -v ./internal/...
+	$(GOTEST) -v ./...
 
 # Run tests with coverage summary
 test-cover:
 	@echo "Running tests with coverage..."
-	@$(GOTEST) -cover ./internal/... | tee /dev/stderr | \
+	@$(GOTEST) -cover ./... | tee /dev/stderr | \
 		awk '/^ok/ {total += $$5; count++} END {if(count>0) printf "\n=== Average Coverage: %.1f%% ===\n", total/count}'
 
 # Generate detailed coverage report
 test-cover-report:
 	@echo "Generating coverage report..."
-	$(GOTEST) -coverprofile=$(COVER_FILE) ./internal/...
+	$(GOTEST) -coverprofile=$(COVER_FILE) ./...
 	@echo "\n=== Coverage Summary ==="
 	@$(GOCMD) tool cover -func=$(COVER_FILE) | tail -1
 	@echo ""
@@ -65,6 +65,12 @@ clean:
 	rm -f $(BINARY_NAME)
 	rm -f $(COVER_FILE)
 	rm -f coverage.html
+
+# Run lint checks (vet + gofmt gate; fails loudly instead of silent pass)
+lint:
+	$(GOCMD) vet ./...
+	@files="$$(gofmt -l .)"; if [ -n "$$files" ]; then echo "gofmt needed for:"; echo "$$files"; exit 1; fi
+	@echo "lint OK"
 
 # Run go fmt
 fmt:
@@ -98,6 +104,7 @@ help:
 	@echo "  test-module       Test specific module (MODULE=collector/hackernews)"
 	@echo "  fmt               Format code"
 	@echo "  vet               Run go vet"
+	@echo "  lint              Run vet + gofmt gate"
 	@echo "  run               Build and run"
 	@echo "  run-daemon        Build and run in daemon mode"
 	@echo "  clean             Remove build artifacts"

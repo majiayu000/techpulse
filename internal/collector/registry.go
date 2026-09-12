@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -38,7 +39,10 @@ func (r *Registry) Get(name string) (Collector, bool) {
 	return c, ok
 }
 
-// All returns all registered collectors.
+// All returns all registered collectors in stable name order.
+// Sorting avoids map-iteration nondeterminism so downstream fuzzy
+// dedup (which keeps the first-seen survivor) retains the same URL
+// and source across identical runs.
 func (r *Registry) All() []Collector {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -46,6 +50,9 @@ func (r *Registry) All() []Collector {
 	for _, c := range r.collectors {
 		result = append(result, c)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name() < result[j].Name()
+	})
 	return result
 }
 
@@ -75,7 +82,7 @@ func (r *Registry) CollectAll(ctx context.Context, opts Options) []Result {
 	return results
 }
 
-// Names returns all registered collector names.
+// Names returns all registered collector names in stable sorted order.
 func (r *Registry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -83,6 +90,7 @@ func (r *Registry) Names() []string {
 	for name := range r.collectors {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 

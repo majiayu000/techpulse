@@ -2,6 +2,7 @@ package progress
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -108,5 +109,63 @@ func TestBarConcurrentUpdates(t *testing.T) {
 
 	if bar.current != 100 {
 		t.Errorf("expected current 100, got %d", bar.current)
+	}
+}
+
+// TestBarFinishSummary verifies the Finish summary distinguishes succeeded
+// from failed tasks instead of counting every finished task as completed.
+func TestBarFinishSummary(t *testing.T) {
+	tests := []struct {
+		name        string
+		total       int
+		actions     []string // "ok" or "fail"
+		wantSubs    []string
+		wantMissing []string
+	}{
+		{
+			name:        "all tasks succeeded",
+			total:       2,
+			actions:     []string{"ok", "ok"},
+			wantSubs:    []string{"✓ Completed 2 tasks"},
+			wantMissing: []string{"failed"},
+		},
+		{
+			name:        "mixed success and failure",
+			total:       3,
+			actions:     []string{"ok", "fail", "fail"},
+			wantSubs:    []string{"⚠ Finished 3/3", "1 succeeded", "2 failed"},
+			wantMissing: []string{"✓ Completed"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			bar := New(tt.total)
+			bar.SetOutput(&buf)
+			bar.Start()
+
+			for i, a := range tt.actions {
+				name := fmt.Sprintf("task%d", i+1)
+				if a == "ok" {
+					bar.CompleteTask(name, "")
+				} else {
+					bar.FailTask(name, "boom")
+				}
+			}
+			bar.Finish()
+
+			out := buf.String()
+			for _, sub := range tt.wantSubs {
+				if !strings.Contains(out, sub) {
+					t.Errorf("expected output to contain %q, got %q", sub, out)
+				}
+			}
+			for _, sub := range tt.wantMissing {
+				if strings.Contains(out, sub) {
+					t.Errorf("expected output NOT to contain %q, got %q", sub, out)
+				}
+			}
+		})
 	}
 }

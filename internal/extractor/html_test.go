@@ -29,6 +29,11 @@ func TestExtractTextFromHTML(t *testing.T) {
 			want: "Tom & Jerry - Best Friends",
 		},
 		{
+			name: "decodes escaped entities exactly once",
+			html: "<p>Use &amp;lt;tag&amp;gt; carefully in prose</p>",
+			want: "Use &lt;tag&gt; carefully in prose",
+		},
+		{
 			name: "normalizes whitespace",
 			html: "<p>  Multiple   spaces   here  </p>",
 			want: "Multiple spaces here",
@@ -68,6 +73,13 @@ func TestDecodeHTMLEntities(t *testing.T) {
 		{"&mdash;", "-"},
 		{"&ndash;", "-"},
 		{"mixed &amp; text", "mixed & text"},
+		// Single ordered pass: escaped entities decode exactly one level.
+		{"&amp;lt;", "&lt;"},
+		{"&amp;amp;", "&amp;"},
+		{"&hellip;", "..."},
+		{"&#39;", "'"},
+		// Unknown entities pass through instead of being silently deleted.
+		{"&eacute;", "&eacute;"},
 	}
 
 	for _, tt := range tests {

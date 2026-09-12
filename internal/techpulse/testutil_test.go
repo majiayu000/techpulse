@@ -2,14 +2,69 @@
 package techpulse
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector/hackernews"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector/hackernews"
+	"github.com/majiayu000/techpulse/internal/filter"
+	"github.com/majiayu000/techpulse/internal/logger"
+	"github.com/majiayu000/techpulse/internal/storage"
+	"github.com/majiayu000/techpulse/internal/summarizer"
 )
+
+// fakeCollector is a scriptable Collector for orchestrator tests.
+type fakeCollector struct {
+	name string
+	fn   func(ctx context.Context, opts collector.Options) ([]collector.Article, error)
+}
+
+func (f *fakeCollector) Name() string {
+	if f.name == "" {
+		return "fake"
+	}
+	return f.name
+}
+
+func (f *fakeCollector) Collect(ctx context.Context, opts collector.Options) ([]collector.Article, error) {
+	return f.fn(ctx, opts)
+}
+
+func (f *fakeCollector) Validate() error { return nil }
+
+// testArticle returns a minimal article for tests.
+func testArticle(id int, title string) collector.Article {
+	return collector.Article{
+		ID:       fmt.Sprintf("test-%d", id),
+		Source:   "fake",
+		SourceID: fmt.Sprintf("%d", id),
+		Title:    title,
+		URL:      fmt.Sprintf("https://example.com/%d", id),
+	}
+}
+
+// newOrchestratorTechPulse builds a TechPulse around reg that writes into dir,
+// mirroring how daemon_test wires instances without going through
+// NewWithOptions. Pass filter.NewPipeline() to keep every article.
+func newOrchestratorTechPulse(t *testing.T, reg *collector.Registry, dir string, pipeline *filter.Pipeline) *TechPulse {
+	t.Helper()
+	storeCfg := storage.DefaultConfig()
+	storeCfg.BaseDir = dir
+	return &TechPulse{
+		config:     Config{Limit: 10},
+		registry:   reg,
+		pipeline:   pipeline,
+		summarizer: summarizer.NewBasicSummarizer(),
+		storage:    storage.NewMarkdownStorage(storeCfg),
+		storeCfg:   storeCfg,
+		log:        logger.NewNopLogger(),
+	}
+}
 
 // testRSSFeed for mock RSS server.
 const testRSSFeed = `<?xml version="1.0" encoding="UTF-8"?>

@@ -3,8 +3,8 @@ package summarizer
 import (
 	"testing"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
-	"github.com/anthropic/autonomous-runner/internal/filter"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/filter"
 )
 
 func TestCalculateImportance_ScoreThresholds(t *testing.T) {
@@ -122,10 +122,10 @@ func TestCalculateImportance_SourceWeight(t *testing.T) {
 		expected float64
 	}{
 		// Base 5.0 + source bonus
-		{"hackernews boost", "hackernews_top", 6.0},   // +1.0 bonus
-		{"lobsters boost", "lobsters_hottest", 6.0},   // +1.0 bonus
-		{"reddit neutral", "reddit", 5.0},             // +0.0 bonus
-		{"unknown neutral", "unknown_source", 5.0},    // +0.0 bonus (default)
+		{"hackernews boost", "hackernews_top", 6.0}, // +1.0 bonus
+		{"lobsters boost", "lobsters_hottest", 6.0}, // +1.0 bonus
+		{"reddit neutral", "reddit", 5.0},           // +0.0 bonus
+		{"unknown neutral", "unknown_source", 5.0},  // +0.0 bonus (default)
 	}
 
 	for _, tc := range tests {
@@ -147,7 +147,7 @@ func TestCalculateImportance_SourceWeightCombined(t *testing.T) {
 	a := filter.FilteredArticle{
 		Article: collector.Article{
 			Source:   "hackernews_top",
-			Score:    600,  // +2.0
+			Score:    600, // +2.0
 			Comments: 300, // +1.5
 		},
 		MatchedKeywords: []string{"AI", "GPT"}, // +1.0

@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -32,27 +33,107 @@ func TestNewRateLimiter(t *testing.T) {
 		t.Error("limiters map is nil")
 	}
 }
-
-func TestExtractDomain(t *testing.T) {
+func TestLimiterKey(t *testing.T) {
 	tests := []struct {
-		url      string
-		expected string
-		wantErr  bool
+		url string
+		key string
+		ok  bool
 	}{
-		{"https://example.com/path", "example.com", false},
-		{"https://api.github.com/repos", "api.github.com", false},
-		{"http://localhost:8080/test", "localhost:8080", false},
-		{"invalid-url", "", false}, // url.Parse doesn't fail on this
+		{"https://example.com/path", "https://example.com", true},
+		{"https://api.github.com/repos", "https://api.github.com", true},
+		{"http://localhost:8080/test", "http://localhost:8080", true},
+		{"https://example.com:8443/a", "https://example.com:8443", true},
+		{"ftp://files.example.com/x", "ftp://files.example.com", true},
+		{"http://example.com/path", "http://example.com", true},
+		{"invalid-url", "", false},
+		{"mailto:user@example.com", "", false},
+		{"/relative/path", "", false},
+		{"::bad::", "", false},
 	}
 
 	for _, tt := range tests {
-		domain, err := extractDomain(tt.url)
-		if (err != nil) != tt.wantErr {
-			t.Errorf("extractDomain(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
+		key, ok := limiterKey(tt.url)
+		if ok != tt.ok {
+			t.Errorf("limiterKey(%q) ok = %v, want %v", tt.url, ok, tt.ok)
 		}
-		if domain != tt.expected {
-			t.Errorf("extractDomain(%q) = %q, want %q", tt.url, domain, tt.expected)
+		if key != tt.key {
+			t.Errorf("limiterKey(%q) = %q, want %q", tt.url, key, tt.key)
 		}
+	}
+}
+
+func TestNewRateLimiterClampsInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfg       RateLimitConfig
+		wantRate  float64
+		wantBurst int
+	}{
+		{
+			name:      "zero RPS falls back to DefaultDelay pacing",
+			cfg:       RateLimitConfig{RequestsPerSecond: 0, BurstSize: 5, DefaultDelay: 200 * time.Millisecond},
+			wantRate:  5.0,
+			wantBurst: 5,
+		},
+		{
+			name:      "negative RPS falls back to DefaultDelay pacing",
+			cfg:       RateLimitConfig{RequestsPerSecond: -3, BurstSize: 2, DefaultDelay: 500 * time.Millisecond},
+			wantRate:  2.0,
+			wantBurst: 2,
+		},
+		{
+			name:      "no usable rate falls back to 1 rps",
+			cfg:       RateLimitConfig{RequestsPerSecond: 0, BurstSize: 4, DefaultDelay: 0},
+			wantRate:  1.0,
+			wantBurst: 4,
+		},
+		{
+			name:      "valid config kept as-is",
+			cfg:       RateLimitConfig{RequestsPerSecond: 7.5, BurstSize: 3, DefaultDelay: 0},
+			wantRate:  7.5,
+			wantBurst: 3,
+		},
+		{
+			name:      "burst below 1 clamped to 1",
+			cfg:       RateLimitConfig{RequestsPerSecond: 2, BurstSize: 0, DefaultDelay: 0},
+			wantRate:  2.0,
+			wantBurst: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rl := NewRateLimiter(tt.cfg)
+			if math.Abs(rl.config.RequestsPerSecond-tt.wantRate) > 1e-9 {
+				t.Errorf("RequestsPerSecond = %v, want %v", rl.config.RequestsPerSecond, tt.wantRate)
+			}
+			if rl.config.BurstSize != tt.wantBurst {
+				t.Errorf("BurstSize = %d, want %d", rl.config.BurstSize, tt.wantBurst)
+			}
+		})
+	}
+}
+
+func TestRateLimiterFallbackPacing(t *testing.T) {
+	// A non-positive rate must not spin or hang: the fallback paces at one
+	// request per DefaultDelay.
+	rl := NewRateLimiter(RateLimitConfig{RequestsPerSecond: -1, BurstSize: 1, DefaultDelay: 50 * time.Millisecond})
+	ctx := context.Background()
+
+	if err := rl.Wait(ctx, "https://example.com/a"); err != nil {
+		t.Fatalf("First Wait() error = %v", err)
+	}
+
+	start := time.Now()
+	if err := rl.Wait(ctx, "https://example.com/a"); err != nil {
+		t.Fatalf("Second Wait() error = %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if elapsed < 40*time.Millisecond {
+		t.Errorf("Throttled request took %v, expected >= 40ms (paced by DefaultDelay)", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Throttled request took %v, expected < 2s (must not hang)", elapsed)
 	}
 }
 

@@ -216,7 +216,7 @@ hackernews/
 ```go
 package filter
 
-import "github.com/anthropic/autonomous-runner/internal/collector"
+import "github.com/majiayu000/techpulse/internal/collector"
 
 // FilteredArticle 过滤后的文章
 type FilteredArticle struct {
@@ -301,7 +301,7 @@ package summarizer
 import (
     "context"
 
-    "github.com/anthropic/autonomous-runner/internal/filter"
+    "github.com/majiayu000/techpulse/internal/filter"
 )
 
 // EnrichedArticle AI 增强后的文章
@@ -355,7 +355,7 @@ package storage
 import (
     "time"
 
-    "github.com/anthropic/autonomous-runner/internal/summarizer"
+    "github.com/majiayu000/techpulse/internal/summarizer"
 )
 
 // Storage 存储接口
@@ -396,8 +396,8 @@ import (
     "strings"
     "time"
 
-    "github.com/anthropic/autonomous-runner/internal/memory"
-    "github.com/anthropic/autonomous-runner/internal/summarizer"
+    "github.com/majiayu000/techpulse/internal/memory"
+    "github.com/majiayu000/techpulse/internal/summarizer"
 )
 
 // MemoryBridge Memory 模块桥接
@@ -635,8 +635,8 @@ import (
     "net/http/httptest"
     "testing"
 
-    "github.com/anthropic/autonomous-runner/internal/collector"
-    "github.com/anthropic/autonomous-runner/internal/collector/hackernews"
+    "github.com/majiayu000/techpulse/internal/collector"
+    "github.com/majiayu000/techpulse/internal/collector/hackernews"
 )
 
 func TestCollector_Collect(t *testing.T) {
@@ -681,10 +681,10 @@ import (
     "testing"
     "time"
 
-    "github.com/anthropic/autonomous-runner/internal/collector"
-    "github.com/anthropic/autonomous-runner/internal/collector/hackernews"
-    "github.com/anthropic/autonomous-runner/internal/filter"
-    "github.com/anthropic/autonomous-runner/internal/storage"
+    "github.com/majiayu000/techpulse/internal/collector"
+    "github.com/majiayu000/techpulse/internal/collector/hackernews"
+    "github.com/majiayu000/techpulse/internal/filter"
+    "github.com/majiayu000/techpulse/internal/storage"
 )
 
 func TestEndToEnd(t *testing.T) {

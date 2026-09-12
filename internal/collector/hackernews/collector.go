@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/httpclient"
 )
 
 // Collector collects articles from Hacker News.
@@ -15,9 +16,11 @@ type Collector struct {
 }
 
 // New creates a new HN collector for the specified category.
-func New(category string) *Collector {
+// Optional httpclient options configure the underlying request client
+// (for example per-request timeout).
+func New(category string, opts ...httpclient.Option) *Collector {
 	return &Collector{
-		client:   NewClient(),
+		client:   NewClient(opts...),
 		category: category,
 	}
 }
@@ -61,8 +64,13 @@ func (c *Collector) Collect(ctx context.Context, opts collector.Options) ([]coll
 	}
 	ids = ids[:limit]
 
-	// Fetch items concurrently
-	items := c.client.FetchItemsConcurrently(ctx, ids, DefaultConcurrency)
+	// Fetch items concurrently, failing closed on total failure or context
+	// cancellation instead of silently reporting partial data as success.
+	res := c.client.fetchItemsConcurrently(ctx, ids, DefaultConcurrency)
+	if res.err != nil {
+		return nil, fmt.Errorf("fetch items: %w", res.err)
+	}
+	items := res.items
 
 	// Filter and convert to articles
 	articles := make([]collector.Article, 0, len(items))

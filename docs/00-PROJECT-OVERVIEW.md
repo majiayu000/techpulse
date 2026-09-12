@@ -45,7 +45,7 @@ go build -o techpulse ./cmd/techpulse
 ## 项目结构
 
 ```
-auto-run-agent/
+techpulse/
 ├── cmd/
 │   └── techpulse/              # TechPulse CLI 入口
 │       └── main.go

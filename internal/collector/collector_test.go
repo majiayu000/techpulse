@@ -46,8 +46,8 @@ func TestDefaultOptions(t *testing.T) {
 	if opts.Limit != 30 {
 		t.Errorf("expected Limit 30, got %d", opts.Limit)
 	}
-	if opts.Timeout != 30*time.Second {
-		t.Errorf("expected Timeout 30s, got %v", opts.Timeout)
+	if opts.Timeout != 0 {
+		t.Errorf("expected Timeout 0 (no Collect-level deadline), got %v", opts.Timeout)
 	}
 	if !opts.Since.IsZero() {
 		t.Errorf("expected Since to be zero, got %v", opts.Since)
