@@ -16,7 +16,7 @@
 ├────────────────────────────────────────────────────────────┤
 │                    Worker (Claude CLI)                      │
 │              (单次任务后退出)                                │
-│    Claude Code + --dangerously-skip-permissions             │
+│    Claude Code (permission prompts by default)              │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -192,7 +192,10 @@ tail -f /path/to/project/logs/orchestrator_*.log
 2. **时间限制**：`max_duration` 防止无限运行
 3. **无进展检测**：连续无变化自动停止
 4. **优雅退出**：Ctrl+C 会完成当前任务后停止
-5. **权限提示**：使用 `--dangerously-skip-permissions`，建议在受控目录运行
+5. **权限模式（默认安全）**：Worker **默认不**传 `--dangerously-skip-permissions`，保留 Claude CLI 权限提示。仅在明确需要无人值守且充分信任工作区时，通过显式 opt-in 开启：
+   - 环境变量：`TECHPULSE_CLAUDE_SKIP_PERMISSIONS=true`（或别名 `AUTONOMOUS_RUNNER_SKIP_PERMISSIONS=true`）
+   - 代码：`Runner.SkipPermissions = true` / `SetSkipPermissions(true)`
+   - 开启后会禁用文件系统/工具权限提示，扩大本地执行风险；详见 [SECURITY.md](SECURITY.md)
 
 ## 常见问题
 

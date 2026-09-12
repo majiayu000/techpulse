@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"regexp"
@@ -61,12 +62,25 @@ func (e ErrorType) String() string {
 	}
 }
 
+const (
+	// EnvClaudeSkipPermissions is the preferred opt-in for skipping Claude CLI permission prompts.
+	EnvClaudeSkipPermissions = "TECHPULSE_CLAUDE_SKIP_PERMISSIONS"
+	// EnvAutonomousRunnerSkipPermissions is a legacy alias for the same opt-in.
+	EnvAutonomousRunnerSkipPermissions = "AUTONOMOUS_RUNNER_SKIP_PERMISSIONS"
+	claudeSkipPermissionsFlag          = "--dangerously-skip-permissions"
+)
+
 // Runner Claude CLI 运行器
 type Runner struct {
 	memory       *memory.Manager
 	workspaceDir string
 	timeout      time.Duration
 	onOutput     func(line string) // 实时输出回调
+	// SkipPermissions, when true, appends --dangerously-skip-permissions to the Claude CLI.
+	// Default is false. Prefer permission prompts / sandbox for unattended runs.
+	// Can also be enabled via TECHPULSE_CLAUDE_SKIP_PERMISSIONS or
+	// AUTONOMOUS_RUNNER_SKIP_PERMISSIONS (1/true/yes/on).
+	SkipPermissions bool
 }
 
 // NewRunner 创建运行器
@@ -83,6 +97,40 @@ func (r *Runner) SetOutputCallback(cb func(line string)) {
 	r.onOutput = cb
 }
 
+// SetSkipPermissions enables or disables the Claude CLI skip-permissions flag.
+func (r *Runner) SetSkipPermissions(enabled bool) {
+	r.SkipPermissions = enabled
+}
+
+// skipPermissionsEnabled reports whether the dangerous skip-permissions flag should be used.
+func (r *Runner) skipPermissionsEnabled() bool {
+	if r.SkipPermissions {
+		return true
+	}
+	return envTruthy(EnvClaudeSkipPermissions) || envTruthy(EnvAutonomousRunnerSkipPermissions)
+}
+
+func envTruthy(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// buildClaudeArgs constructs Claude CLI argv for the given prompt.
+// --dangerously-skip-permissions is omitted unless explicitly opted in.
+func (r *Runner) buildClaudeArgs(prompt string) []string {
+	args := []string{"-p", prompt}
+	if r.skipPermissionsEnabled() {
+		log.Printf("WARNING: enabling %s via explicit opt-in; this disables Claude CLI filesystem/tool permission prompts and expands local execution risk", claudeSkipPermissionsFlag)
+		args = append(args, claudeSkipPermissionsFlag)
+	}
+	args = append(args, "--output-format", "json")
+	return args
+}
+
 // Run 运行 Worker
 func (r *Runner) Run(ctx context.Context) *Result {
 	start := time.Now()
@@ -94,11 +142,7 @@ func (r *Runner) Run(ctx context.Context) *Result {
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "claude",
-		"-p", prompt,
-		"--dangerously-skip-permissions",
-		"--output-format", "json",
-	)
+	cmd := exec.CommandContext(ctx, "claude", r.buildClaudeArgs(prompt)...)
 	cmd.Dir = r.workspaceDir
 	cmd.Env = os.Environ()
 
