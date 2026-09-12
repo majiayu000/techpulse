@@ -63,7 +63,7 @@ func TestSummarizingEnricher_EnrichWithSummaries(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := httpclient.New()
+	client := httpclient.New(httpclient.WithAllowPrivateHosts(true))
 	cfg := DefaultSummaryConfig()
 	enricher := NewSummarizingEnricher(client, cfg)
 

@@ -8,7 +8,13 @@ import (
 	"time"
 
 	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/anthropic/autonomous-runner/internal/httpclient"
 )
+
+// newTestCollector builds an RSS collector that may dial httptest loopback.
+func newTestCollector(sources []Source) *Collector {
+	return New(sources, httpclient.WithAllowPrivateHosts(true))
+}
 
 const testRSSFeed = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
@@ -79,7 +85,7 @@ func TestCollectorCollect(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New([]Source{{Name: "TestFeed", URL: server.URL}})
+	c := newTestCollector([]Source{{Name: "TestFeed", URL: server.URL}})
 
 	ctx := context.Background()
 	articles, err := c.Collect(ctx, collector.Options{Limit: 10})
@@ -113,7 +119,7 @@ func TestCollectorCollectWithLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New([]Source{{Name: "TestFeed", URL: server.URL}})
+	c := newTestCollector([]Source{{Name: "TestFeed", URL: server.URL}})
 
 	ctx := context.Background()
 	articles, err := c.Collect(ctx, collector.Options{Limit: 1})
@@ -133,7 +139,7 @@ func TestCollectorCollectWithTimeFilter(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New([]Source{{Name: "TestFeed", URL: server.URL}})
+	c := newTestCollector([]Source{{Name: "TestFeed", URL: server.URL}})
 
 	// Filter for articles after 9:30
 	since, _ := time.Parse(time.RFC1123Z, "Mon, 01 Jan 2026 09:30:00 +0000")
@@ -164,7 +170,7 @@ func TestCollectorCollectMultipleSources(t *testing.T) {
 	}))
 	defer server2.Close()
 
-	c := New([]Source{
+	c := newTestCollector([]Source{
 		{Name: "Feed1", URL: server1.URL},
 		{Name: "Feed2", URL: server2.URL},
 	})
@@ -192,7 +198,7 @@ func TestCollectorCollectSourceError(t *testing.T) {
 	}))
 	defer badServer.Close()
 
-	c := New([]Source{
+	c := newTestCollector([]Source{
 		{Name: "Good", URL: goodServer.URL},
 		{Name: "Bad", URL: badServer.URL},
 	})
