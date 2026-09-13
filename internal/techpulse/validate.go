@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/anthropic/autonomous-runner/internal/httpclient"
 )
 
 // ValidationError represents a configuration validation error.
@@ -131,6 +133,11 @@ func ValidateFileConfig(cfg *FileConfig) ValidationErrors {
 			errs = append(errs, ValidationError{
 				Field:   fmt.Sprintf("rss_feeds[%d].url", i),
 				Message: "must be a valid HTTP/HTTPS URL",
+			})
+		} else if httpclient.HasLiteralBlockedHost(feed.URL) {
+			errs = append(errs, ValidationError{
+				Field:   fmt.Sprintf("rss_feeds[%d].url", i),
+				Message: "must not target private, loopback, or link-local hosts",
 			})
 		}
 	}
