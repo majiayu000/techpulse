@@ -2,6 +2,7 @@ package worker
 
 import (
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -93,5 +94,96 @@ func TestStreamOutput_LargeJSONLineBeyondScannerDefault(t *testing.T) {
 	}
 	if strings.Contains(out, "[streamOutput error:") {
 		t.Fatalf("unexpected stream error for large line: %q", out)
+	}
+}
+
+func containsFlag(args []string, flag string) bool {
+	return slices.Contains(args, flag)
+}
+
+func TestBuildClaudeArgs_DefaultOmitsSkipPermissions(t *testing.T) {
+	t.Setenv(EnvClaudeSkipPermissions, "")
+	t.Setenv(EnvAutonomousRunnerSkipPermissions, "")
+
+	r := &Runner{}
+	args := r.buildClaudeArgs("test prompt")
+
+	if containsFlag(args, claudeSkipPermissionsFlag) {
+		t.Fatalf("default args must omit %s; got %v", claudeSkipPermissionsFlag, args)
+	}
+	if !slices.Equal(args, []string{"-p", "test prompt", "--output-format", "json"}) {
+		t.Fatalf("unexpected default args: %v", args)
+	}
+}
+
+func TestBuildClaudeArgs_OptInViaField(t *testing.T) {
+	t.Setenv(EnvClaudeSkipPermissions, "")
+	t.Setenv(EnvAutonomousRunnerSkipPermissions, "")
+
+	r := &Runner{SkipPermissions: true}
+	args := r.buildClaudeArgs("test prompt")
+
+	if !containsFlag(args, claudeSkipPermissionsFlag) {
+		t.Fatalf("field opt-in must include %s; got %v", claudeSkipPermissionsFlag, args)
+	}
+	want := []string{"-p", "test prompt", claudeSkipPermissionsFlag, "--output-format", "json"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("unexpected opt-in args:\n got %v\nwant %v", args, want)
+	}
+}
+
+func TestBuildClaudeArgs_OptInViaTechpulseEnv(t *testing.T) {
+	t.Setenv(EnvClaudeSkipPermissions, "true")
+	t.Setenv(EnvAutonomousRunnerSkipPermissions, "")
+
+	r := &Runner{}
+	args := r.buildClaudeArgs("hello")
+
+	if !containsFlag(args, claudeSkipPermissionsFlag) {
+		t.Fatalf("%s=true must include %s; got %v", EnvClaudeSkipPermissions, claudeSkipPermissionsFlag, args)
+	}
+}
+
+func TestBuildClaudeArgs_OptInViaAutonomousRunnerEnv(t *testing.T) {
+	t.Setenv(EnvClaudeSkipPermissions, "")
+	t.Setenv(EnvAutonomousRunnerSkipPermissions, "1")
+
+	r := &Runner{}
+	args := r.buildClaudeArgs("hello")
+
+	if !containsFlag(args, claudeSkipPermissionsFlag) {
+		t.Fatalf("%s=1 must include %s; got %v", EnvAutonomousRunnerSkipPermissions, claudeSkipPermissionsFlag, args)
+	}
+}
+
+func TestBuildClaudeArgs_EnvFalsyDoesNotEnable(t *testing.T) {
+	t.Setenv(EnvClaudeSkipPermissions, "false")
+	t.Setenv(EnvAutonomousRunnerSkipPermissions, "0")
+
+	r := &Runner{}
+	args := r.buildClaudeArgs("hello")
+
+	if containsFlag(args, claudeSkipPermissionsFlag) {
+		t.Fatalf("falsy env must omit %s; got %v", claudeSkipPermissionsFlag, args)
+	}
+}
+
+func TestSetSkipPermissions(t *testing.T) {
+	t.Setenv(EnvClaudeSkipPermissions, "")
+	t.Setenv(EnvAutonomousRunnerSkipPermissions, "")
+
+	r := NewRunner(nil, ".", 0)
+	if r.SkipPermissions {
+		t.Fatal("NewRunner must default SkipPermissions to false")
+	}
+
+	r.SetSkipPermissions(true)
+	if !containsFlag(r.buildClaudeArgs("p"), claudeSkipPermissionsFlag) {
+		t.Fatal("SetSkipPermissions(true) must enable the flag")
+	}
+
+	r.SetSkipPermissions(false)
+	if containsFlag(r.buildClaudeArgs("p"), claudeSkipPermissionsFlag) {
+		t.Fatal("SetSkipPermissions(false) must disable the flag")
 	}
 }
