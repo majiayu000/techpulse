@@ -708,6 +708,29 @@ func TestEnforceRetention(t *testing.T) {
 	}
 }
 
+func TestSavePreservesOldArchivesByDefault(t *testing.T) {
+	config := DefaultConfig()
+	config.BaseDir = t.TempDir()
+	storage := NewMarkdownStorage(config)
+
+	archiveDir := filepath.Join(config.BaseDir, config.ArchiveDir)
+	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	oldDate := dateDaysAgo(90)
+	writeArchiveFile(t, archiveDir, oldDate, "old")
+
+	articles := []summarizer.EnrichedArticle{
+		createTestEnrichedArticle("1", "Today Article", "hackernews", 8.0),
+	}
+	if err := storage.Save(articles); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(archiveDir, oldDate+".md")); err != nil {
+		t.Errorf("old archive should remain by default: %v", err)
+	}
+}
+
 func TestSaveRunsRetentionAfterWrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	config := Config{

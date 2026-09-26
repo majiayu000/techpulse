@@ -110,11 +110,33 @@ func TestParseFlagsCLIPassedFlagsBeatFileConfig(t *testing.T) {
 			wantSources: []string{},
 		},
 		{
+			name:          "unset retention defaults to no cleanup",
+			configYAML:    "limit: 30\n",
+			wantLimit:     30,
+			wantTimeout:   60,
+			wantRetention: intPtr(0),
+		},
+		{
 			name:          "file retention_days=0 disables cleanup",
 			configYAML:    "retention_days: 0\n",
 			wantLimit:     30,
 			wantTimeout:   60,
 			wantRetention: intPtr(0),
+		},
+		{
+			name:          "file retention_days=30 enables cleanup",
+			configYAML:    "retention_days: 30\n",
+			wantLimit:     30,
+			wantTimeout:   60,
+			wantRetention: intPtr(30),
+		},
+		{
+			name:          "explicit retention flag enables cleanup",
+			configYAML:    "limit: 30\n",
+			args:          []string{"--retention-days", "30"},
+			wantLimit:     30,
+			wantTimeout:   60,
+			wantRetention: intPtr(30),
 		},
 		{
 			name:          "explicit --retention-days beats file",

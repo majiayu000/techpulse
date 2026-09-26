@@ -379,7 +379,7 @@ func DefaultConfig(baseDir string) Config {
         BaseDir:       baseDir,
         DigestFile:    "DIGEST.md",
         ArchiveDir:    "archive",
-        RetentionDays: 30,
+        RetentionDays: 0,
     }
 }
 ```
@@ -608,7 +608,7 @@ techpulse:
   # 存储配置
   storage:
     type: "markdown"  # 或 "sqlite"
-    retention_days: 30
+    retention_days: 30  # 显式启用 30 天清理
     archive_compress: true
 
   # 调度配置

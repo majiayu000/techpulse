@@ -27,8 +27,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Timeout != 60 {
 		t.Errorf("Timeout = %d, want 60", cfg.Timeout)
 	}
-	if cfg.RetentionDays != 30 {
-		t.Errorf("RetentionDays = %d, want 30", cfg.RetentionDays)
+	if cfg.RetentionDays != 0 {
+		t.Errorf("RetentionDays = %d, want 0", cfg.RetentionDays)
 	}
 }
 

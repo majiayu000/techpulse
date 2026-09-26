@@ -71,9 +71,8 @@ func NewWithOptions(cfg Config) *TechPulse {
 	if cfg.Output != "" {
 		storeCfg.BaseDir = cfg.Output
 	}
-	// Always honor the runtime retention setting (including explicit 0 to
-	// disable cleanup). DefaultConfig already seeds RetentionDays from
-	// storage.DefaultConfig, so an unset path keeps the documented default.
+	// Honor the runtime retention setting. Defaults disable cleanup; a
+	// positive value enables it for that run.
 	storeCfg.RetentionDays = cfg.RetentionDays
 
 	return &TechPulse{

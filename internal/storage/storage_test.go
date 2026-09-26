@@ -19,8 +19,8 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("expected ArchiveDir 'archive', got '%s'", config.ArchiveDir)
 	}
 
-	if config.RetentionDays != 30 {
-		t.Errorf("expected RetentionDays 30, got %d", config.RetentionDays)
+	if config.RetentionDays != 0 {
+		t.Errorf("expected RetentionDays 0, got %d", config.RetentionDays)
 	}
 }
 

@@ -33,6 +33,6 @@ func DefaultConfig() Config {
 		BaseDir:       ".techpulse",
 		DigestFile:    "DIGEST.md",
 		ArchiveDir:    "archive",
-		RetentionDays: 30,
+		RetentionDays: 0,
 	}
 }

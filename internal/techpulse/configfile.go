@@ -145,7 +145,8 @@ output: .techpulse
 # Request timeout in seconds (default: 60). Applied per HTTP request.
 timeout: 60
 
-# Archive retention in days (default: 30). Set to 0 to disable cleanup.
+# Archive retention in days (default: 0, no automatic deletion).
+# Set to a positive number to delete older daily archives.
 # retention_days: 30
 
 # Specify which sources to use (optional, uses all if empty)

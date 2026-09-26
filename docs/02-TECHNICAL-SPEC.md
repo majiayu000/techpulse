@@ -1092,7 +1092,7 @@ func RegisterCollectionDetector(multi *progress.MultiDetector) {
    - **建议**: v1.1 支持
 
 3. **问题**: 归档数据保留多久？
-   - **建议**: 默认 30 天，可配置
+   - **决定**: 默认不自动删除，可配置保留天数
 
 ---
 
