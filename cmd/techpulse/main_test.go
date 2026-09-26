@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majiayu000/techpulse/internal/logger"
 	"github.com/majiayu000/techpulse/internal/techpulse"
@@ -183,6 +188,12 @@ func TestParseFlagsValidateIsHonest(t *testing.T) {
 			wantErrContains: "validation failed",
 		},
 		{
+			name:            "CLI override validates effective limit",
+			configYAML:      "limit: 9999\n",
+			args:            []string{"--limit", "10", "--validate"},
+			wantErrContains: "",
+		},
+		{
 			name:            "unknown source in file fails",
 			configYAML:      "sources:\n  - twitter_timeline\n",
 			args:            []string{"--validate"},
@@ -193,6 +204,12 @@ func TestParseFlagsValidateIsHonest(t *testing.T) {
 			configYAML:      "rss_feeds:\n  - name: X\n    url: notaurl\n",
 			args:            []string{"--validate"},
 			wantErrContains: "must be a valid HTTP/HTTPS URL",
+		},
+		{
+			name:            "RSS URL without host fails validate",
+			configYAML:      "rss_feeds:\n  - name: X\n    url: http:foo\n",
+			args:            []string{"--validate"},
+			wantErrContains: "rss_feeds[0].url",
 		},
 		{
 			name:            "valid config passes",
@@ -265,6 +282,12 @@ func TestParseFlagsRejections(t *testing.T) {
 			configYAML:      "sources:\n  - hackernews_bogus\n",
 			args:            []string{},
 			wantErrContains: "unknown source",
+		},
+		{
+			name:            "invalid RSS feed rejected during normal startup",
+			configYAML:      "rss_feeds:\n  - name: Broken\n    url: notaurl\n",
+			args:            []string{},
+			wantErrContains: "rss_feeds[0].url",
 		},
 		{
 			name:            "undefined flag rejected",
@@ -346,6 +369,14 @@ func TestCreateConfigProviderKeepsLastGoodOnFailure(t *testing.T) {
 		t.Errorf("after invalid file, Limit = %d, want last-good 40", got.Limit)
 	}
 
+	// A malformed RSS feed is file-only; it cannot be fixed by a CLI flag.
+	if err := os.WriteFile(path, []byte("limit: 50\nrss_feeds:\n  - name: Broken\n    url: notaurl\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider(); got.Limit != 40 {
+		t.Errorf("after invalid RSS feed, Limit = %d, want last-good 40", got.Limit)
+	}
+
 	// A good edit takes effect again.
 	if err := os.WriteFile(path, []byte("limit: 70\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -409,5 +440,67 @@ func TestSplitSources(t *testing.T) {
 	want := []string{"rss", "reddit"}
 	if !slices.Equal(got, want) {
 		t.Errorf("splitSources = %v, want %v", got, want)
+	}
+}
+
+func TestCanceledRunExits130(t *testing.T) {
+	for _, mode := range []string{"once", "daemon"} {
+		t.Run(mode, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCanceledRunHelper$")
+			cmd.Env = append(os.Environ(), "TECHPULSE_TEST_CANCELED_MODE="+mode)
+			output, err := cmd.CombinedOutput()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("subprocess error = %v, output = %s", err, output)
+			}
+			if got := exitErr.ExitCode(); got != 130 {
+				t.Errorf("exit code = %d, want 130; output = %s", got, output)
+			}
+		})
+	}
+}
+
+func TestCanceledRunHelper(t *testing.T) {
+	mode := os.Getenv("TECHPULSE_TEST_CANCELED_MODE")
+	if mode == "" {
+		return
+	}
+	quiet = true
+	cfg := techpulse.DefaultConfig()
+	cfg.Sources = []string{"hackernews_top"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if mode == "daemon" {
+		interval = time.Hour
+		runDaemon(ctx, cfg)
+	} else {
+		runOnce(ctx, cfg)
+	}
+	t.Fatal("interrupted run returned without exiting")
+}
+
+func TestCompletionMessageDoesNotClaimReportSaved(t *testing.T) {
+	oldStdout := os.Stdout
+	oldQuiet := quiet
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		quiet = oldQuiet
+		r.Close()
+		w.Close()
+	})
+	quiet = false
+	printCollectionDone(time.Date(2026, 9, 26, 1, 2, 3, 0, time.UTC))
+	w.Close()
+	output, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(output), "Collection completed. Next: 01:02:03\n"; got != want {
+		t.Errorf("completion message = %q, want %q", got, want)
 	}
 }

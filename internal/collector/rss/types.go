@@ -91,13 +91,14 @@ func (t *AtomText) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 		switch v := tok.(type) {
 		case xml.StartElement:
 			depth++
-			// Adjacent XHTML elements (e.g. </p><p>) contribute no CharData
-			// between them; insert a separator so "machine"+"learning" does
-			// not become "machinelearning" after whitespace collapse.
-			writeAtomXHTMLSeparator(&b)
+			// Block elements separate words; inline elements can occur within
+			// a word (for example Open<em>AI</em>) and must not add spaces.
+			if isAtomXHTMLBlock(v.Name.Local) {
+				writeAtomXHTMLSeparator(&b)
+			}
 		case xml.EndElement:
 			depth--
-			if depth > 0 {
+			if depth > 0 && isAtomXHTMLBlock(v.Name.Local) {
 				writeAtomXHTMLSeparator(&b)
 			}
 		case xml.CharData:
@@ -106,6 +107,18 @@ func (t *AtomText) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	}
 	t.Value = normalizeAtomText(t.Type, strings.TrimSpace(b.String()))
 	return nil
+}
+
+func isAtomXHTMLBlock(name string) bool {
+	switch name {
+	case "address", "article", "aside", "blockquote", "br", "dd", "div", "dl",
+		"dt", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4",
+		"h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p",
+		"pre", "section", "table", "td", "th", "tr", "ul":
+		return true
+	default:
+		return false
+	}
 }
 
 // writeAtomXHTMLSeparator inserts a single space before the next token when

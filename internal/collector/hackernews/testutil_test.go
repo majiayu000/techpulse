@@ -12,6 +12,7 @@ func newFastTestClient(baseURL string) *Client {
 	return &Client{
 		httpClient: httpclient.New(
 			httpclient.WithRetryConfig(httpclient.NoRetryConfig()),
+			httpclient.WithAllowPrivateHosts(true),
 			httpclient.WithRateLimitConfig(httpclient.RateLimitConfig{
 				RequestsPerSecond: 10000,
 				BurstSize:         1000,

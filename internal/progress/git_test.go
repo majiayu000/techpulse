@@ -10,15 +10,9 @@ import (
 )
 
 func TestGitDetector_NewInGitRepo(t *testing.T) {
-	// Use current repo as test since it's a git repo
-	wd, err := os.Getwd()
+	gd, err := NewGitDetector(t.TempDir())
 	if err != nil {
-		t.Skipf("cannot get working directory: %v", err)
-	}
-
-	gd, err := NewGitDetector(wd)
-	if err != nil {
-		t.Skipf("test directory not a git repo: %v", err)
+		t.Fatal(err)
 	}
 	if gd == nil {
 		t.Fatal("expected non-nil GitDetector")
@@ -26,10 +20,9 @@ func TestGitDetector_NewInGitRepo(t *testing.T) {
 }
 
 func TestGitDetector_Name(t *testing.T) {
-	wd, _ := os.Getwd()
-	gd, err := NewGitDetector(wd)
+	gd, err := NewGitDetector(t.TempDir())
 	if err != nil {
-		t.Skipf("test skipped: %v", err)
+		t.Fatal(err)
 	}
 
 	if gd.Name() != "git" {
@@ -38,10 +31,9 @@ func TestGitDetector_Name(t *testing.T) {
 }
 
 func TestGitDetector_DetectNoChanges(t *testing.T) {
-	wd, _ := os.Getwd()
-	gd, err := NewGitDetector(wd)
+	gd, err := NewGitDetector(t.TempDir())
 	if err != nil {
-		t.Skipf("test skipped: %v", err)
+		t.Fatal(err)
 	}
 
 	// Reset first to get clean state
@@ -83,10 +75,9 @@ func TestGitDetector_DetectWithNewFile(t *testing.T) {
 }
 
 func TestGitDetector_Reset(t *testing.T) {
-	wd, _ := os.Getwd()
-	gd, err := NewGitDetector(wd)
+	gd, err := NewGitDetector(t.TempDir())
 	if err != nil {
-		t.Skipf("test skipped: %v", err)
+		t.Fatal(err)
 	}
 
 	err = gd.Reset()
@@ -346,5 +337,90 @@ func TestGitDetector_EmptyRepoNoCommits(t *testing.T) {
 
 	if _, err := g.Detect(); err != nil {
 		t.Errorf("expected Detect to treat empty repo as absence, got %v", err)
+	}
+}
+
+func TestGitDetector_DirtyBaselineAndContentEdit(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGitDetector(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "already dirty.txt")
+	if err := os.WriteFile(file, []byte("before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := g.Detect(); err != nil || changed {
+		t.Fatalf("unchanged dirty file reported progress: changed=%v err=%v", changed, err)
+	}
+	if err := os.WriteFile(file, []byte("after"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := g.Detect(); err != nil || !changed {
+		t.Fatalf("content edit not reported: changed=%v err=%v", changed, err)
+	}
+	if err := g.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := g.Detect(); err != nil || changed {
+		t.Fatalf("post-reset dirty file reported progress: changed=%v err=%v", changed, err)
+	}
+}
+
+func TestGitDetector_IgnoreOperationalLog(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGitDetector(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "runner.log")
+	if err := os.WriteFile(logPath, []byte("start"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g.IgnorePaths(logPath)
+	if err := g.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, []byte("start\niteration done"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := g.Detect(); err != nil || changed {
+		t.Fatalf("log-only write reported progress: changed=%v err=%v", changed, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "work.txt"), []byte("work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := g.Detect(); err != nil || !changed {
+		t.Fatalf("workspace edit not reported: changed=%v err=%v", changed, err)
+	}
+}
+
+func TestGitDetector_DoesNotUseAncestorRepository(t *testing.T) {
+	parent := t.TempDir()
+	if _, err := NewGitDetector(parent); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(parent, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g, err := NewGitDetector(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(child, ".git")); err != nil {
+		t.Fatalf("child workspace did not get its own Git repository: %v", err)
+	}
+	if err := g.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "outside.txt"), []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := g.Detect(); err != nil || changed {
+		t.Fatalf("ancestor edit reported as child progress: changed=%v err=%v", changed, err)
 	}
 }

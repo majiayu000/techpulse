@@ -111,12 +111,10 @@ func newFastCollector(feedSources ...[]Source) *Collector {
 	for _, fs := range feedSources {
 		sources = append(sources, fs...)
 	}
-	c := New(sources)
 	cfg := httpclient.DefaultRetryConfig()
 	cfg.InitialDelay = time.Millisecond
 	cfg.MaxDelay = 5 * time.Millisecond
-	c.httpClient = httpclient.New(httpclient.WithRetryConfig(cfg))
-	return c
+	return New(sources, httpclient.WithRetryConfig(cfg), httpclient.WithAllowPrivateHosts(true))
 }
 
 // mustParseTime parses a fixture timestamp or fails the test.
@@ -882,16 +880,24 @@ func TestDecodeAtomXHTMLPreservesInterElementSeparators(t *testing.T) {
     <link href="https://example.com/sep-1"/>
     <summary type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>machine</p><p>learning</p></div></summary>
   </entry>
+  <entry>
+    <id>tag:example.com,2026:sep-2</id>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Open<em>AI</em> launches product</div></title>
+    <link href="https://example.com/sep-2"/>
+  </entry>
 </feed>`
 	items, err := decodeFeed([]byte(feed), "https://example.com/feed.xml")
 	if err != nil {
 		t.Fatalf("decodeFeed: %v", err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("got %d items, want 1", len(items))
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
 	}
 	if items[0].Description != "machine learning" {
 		t.Errorf("xhtml separators = %q, want %q", items[0].Description, "machine learning")
+	}
+	if items[1].Title != "OpenAI launches product" {
+		t.Errorf("inline XHTML title = %q, want %q", items[1].Title, "OpenAI launches product")
 	}
 }
 
@@ -1055,5 +1061,19 @@ func TestDecodeAtomInheritsFeedLevelAuthor(t *testing.T) {
 	}
 	if items[1].Creator != "Entry Author" {
 		t.Errorf("entry author = %q, want Entry Author", items[1].Creator)
+	}
+}
+
+func TestCollectorRejectsOversizedFeed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(testRSSFeed))
+		_, _ = w.Write([]byte(strings.Repeat(" ", int(httpclient.DefaultMaxResponseBytes))))
+	}))
+	defer server.Close()
+
+	c := newFastCollector([]Source{{Name: "Oversized", URL: server.URL}})
+	_, err := c.Collect(context.Background(), collector.Options{})
+	if err == nil || !strings.Contains(err.Error(), "response body exceeds") {
+		t.Fatalf("oversized feed error = %v, want size-limit error", err)
 	}
 }

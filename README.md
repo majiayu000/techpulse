@@ -39,6 +39,12 @@ cd techpulse
 go build -o techpulse ./cmd/techpulse
 ```
 
+## Autonomous Runner
+
+This repository also includes the Claude CLI runner. `./run.sh` starts that
+runner; see [its usage guide](docs/autonomous-runner.md). TechPulse uses
+the `./cmd/techpulse` source and the Make targets below.
+
 ## Usage
 
 ### Basic Commands
@@ -235,27 +241,31 @@ make test-cover-html   # Generate HTML report and open in browser
 
 ### Test Coverage
 
-Measured with `go test -cover` (statement-weighted total via `go tool cover`):
+Measured with `go test -coverprofile=/tmp/techpulse-coverage.out ./...`
+and `go tool cover -func=/tmp/techpulse-coverage.out`:
 
 | Module | Coverage |
 |--------|----------|
-| filter | 97.6% |
-| summarizer | 95.9% |
-| reddit | 94.4% |
-| extractor | 92.6% |
-| rss | 92.1% |
-| progress | 91.9% |
-| techpulse | 91.7% |
+| filter | 97.7% |
+| summarizer | 95.7% |
+| extractor | 92.8% |
+| reddit | 92.3% |
+| rss | 91.9% |
+| techpulse | 90.7% |
 | hackernews | 90.3% |
-| httpclient | 89.5% |
-| github | 87.4% |
-| storage | 87.1% |
-| lobsters | 87.0% |
+| github | 85.9% |
 | logger | 85.7% |
+| lobsters | 84.5% |
+| storage | 84.1% |
+| httpclient | 80.7% |
+| progress | 80.4% |
 | memory | 75.9% |
-| collector (registry) | 65.5% |
-| cmd/techpulse | 63.7% |
-| **Total** | **88.2%** |
+| cmd/techpulse | 73.7% |
+| collector (registry) | 67.2% |
+| config | 36.8% |
+| worker | 17.7% |
+| cmd/orchestrator | 0.0% |
+| **Total** | **76.4%** |
 
 ### Make Commands
 
@@ -275,9 +285,7 @@ make help             # Show all commands
 
 ### Code Standards
 
-- Each `.go` file is under 200 lines
-- Clean module boundaries with interfaces
-- Comprehensive test coverage (336 tests, 88% statement coverage)
+- Run `make lint` and `make test` before contributing.
 
 ## License
 

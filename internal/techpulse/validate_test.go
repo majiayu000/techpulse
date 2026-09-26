@@ -124,6 +124,30 @@ func TestValidateFileConfig(t *testing.T) {
 			wantErrs: 0,
 		},
 		{
+			name: "private RSS feed IP",
+			cfg: &FileConfig{
+				RSSFeeds: []RSSFeedConfig{{Name: "Internal", URL: "http://127.0.0.1/feed"}},
+			},
+			wantErrs:  1,
+			wantField: "rss_feeds[0].url",
+		},
+		{
+			name: "localhost RSS feed",
+			cfg: &FileConfig{
+				RSSFeeds: []RSSFeedConfig{{Name: "Local", URL: "http://localhost/feed"}},
+			},
+			wantErrs:  1,
+			wantField: "rss_feeds[0].url",
+		},
+		{
+			name: "metadata IP RSS feed",
+			cfg: &FileConfig{
+				RSSFeeds: []RSSFeedConfig{{Name: "Meta", URL: "http://169.254.169.254/latest"}},
+			},
+			wantErrs:  1,
+			wantField: "rss_feeds[0].url",
+		},
+		{
 			name: "empty RSS feed name",
 			cfg: &FileConfig{
 				RSSFeeds: []RSSFeedConfig{{Name: "", URL: "https://example.com/feed"}},

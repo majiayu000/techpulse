@@ -64,7 +64,7 @@ func TestSummarizingEnricher_EnrichWithSummaries(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := httpclient.New()
+	client := httpclient.New(httpclient.WithAllowPrivateHosts(true))
 	cfg := DefaultSummaryConfig()
 	enricher := NewSummarizingEnricher(client, cfg)
 
@@ -152,7 +152,7 @@ func TestSummarizingEnricher_ExtractFailureCountedAndLogged(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := httpclient.New()
+	client := httpclient.New(httpclient.WithAllowPrivateHosts(true))
 	enricher := NewSummarizingEnricher(client, DefaultSummaryConfig())
 
 	articles := []filter.FilteredArticle{
@@ -236,7 +236,7 @@ func TestSummarizingEnricher_FailureCountResetsBetweenRuns(t *testing.T) {
 	}))
 	defer okServer.Close()
 
-	enricher := NewSummarizingEnricher(httpclient.New(), DefaultSummaryConfig())
+	enricher := NewSummarizingEnricher(httpclient.New(httpclient.WithAllowPrivateHosts(true)), DefaultSummaryConfig())
 
 	run1, err := enricher.Enrich(context.Background(), []filter.FilteredArticle{
 		{Article: makeArticle("dead link", failServer.URL, 100)},

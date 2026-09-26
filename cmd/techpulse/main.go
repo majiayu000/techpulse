@@ -110,6 +110,9 @@ func runOnce(ctx context.Context, cfg techpulse.Config) {
 	tp.SetShowProgress(showProgress && !quiet)
 	if err := tp.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if errors.Is(err, context.Canceled) {
+			os.Exit(130)
+		}
 		os.Exit(1)
 	}
 	if !quiet {
@@ -130,9 +133,7 @@ func runDaemon(ctx context.Context, cfg techpulse.Config) {
 			}
 		},
 		OnDone: func() {
-			if !quiet {
-				fmt.Printf("Report saved. Next: %s\n", time.Now().Add(interval).Format("15:04:05"))
-			}
+			printCollectionDone(time.Now().Add(interval))
 		},
 		OnStop: func() {
 			if !quiet {
@@ -142,10 +143,20 @@ func runDaemon(ctx context.Context, cfg techpulse.Config) {
 	}
 	d := techpulse.NewDaemon(cfg, daemonCfg)
 	d.SetLogger(log)
-	if _, err := d.Run(ctx); err != nil &&
-		!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
+	if _, err := d.Run(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			os.Exit(130)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+	}
+}
+
+func printCollectionDone(next time.Time) {
+	if !quiet {
+		fmt.Printf("Collection completed. Next: %s\n", next.Format("15:04:05"))
 	}
 }
 
@@ -155,7 +166,8 @@ func runDaemon(ctx context.Context, cfg techpulse.Config) {
 // validation, is logged at error level and the last known good configuration
 // is kept. Validation runs after CLI overrides — matching startup — so a file
 // value that is invalid on its own but overridden by a valid CLI flag (e.g.
-// limit: 999 with --limit 10) still reloads successfully.
+// limit: 999 with --limit 10) still reloads successfully. RSS feed entries,
+// which have no CLI override, are validated separately.
 func createConfigProvider(baseCfg techpulse.Config) func() techpulse.Config {
 	path := configPath
 	if path == "" {
@@ -174,6 +186,11 @@ func createConfigProvider(baseCfg techpulse.Config) func() techpulse.Config {
 		}
 		cfg := cliOpts.applyTo(techpulse.MergeWithConfig(techpulse.DefaultConfig(), fileCfg))
 		if errs := techpulse.ValidateConfig(cfg); len(errs) > 0 {
+			log.Error("Reloaded config failed validation, keeping last good config",
+				logger.F("path", path), logger.F("errors", errs.Error()))
+			return lastGood
+		}
+		if errs := validateRSSFeedConfig(fileCfg); len(errs) > 0 {
 			log.Error("Reloaded config failed validation, keeping last good config",
 				logger.F("path", path), logger.F("errors", errs.Error()))
 			return lastGood
@@ -274,18 +291,25 @@ func parseFlags(args []string) (*techpulse.Config, error) {
 	if errs := techpulse.ValidateConfig(cfg); len(errs) > 0 {
 		return nil, validationError(errs)
 	}
+	if errs := validateRSSFeedConfig(fileCfg); len(errs) > 0 {
+		return nil, validationError(errs)
+	}
 
 	if validateOnly {
-		// File-level problems that runtime validation does not cover
-		// (e.g. malformed rss_feeds entries) must still fail --validate.
-		if errs := techpulse.ValidateFileConfig(fileCfg); len(errs) > 0 {
-			return nil, validationError(errs)
-		}
 		fmt.Println("Config is valid!")
 		return nil, nil
 	}
 
 	return &cfg, nil
+}
+
+// RSS feeds have no CLI override, so their file values must be valid even
+// when an invalid limit or timeout in the same file is overridden by a flag.
+func validateRSSFeedConfig(fileCfg *techpulse.FileConfig) techpulse.ValidationErrors {
+	if fileCfg == nil {
+		return nil
+	}
+	return techpulse.ValidateFileConfig(&techpulse.FileConfig{RSSFeeds: fileCfg.RSSFeeds})
 }
 
 // loadFileConfig loads the YAML config given via --config or auto-detected,
@@ -302,9 +326,6 @@ func loadFileConfig() (*techpulse.FileConfig, error) {
 	fileCfg, err := techpulse.LoadConfigFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config file %q: %w", configPath, err)
-	}
-	if errs := techpulse.ValidateFileConfig(fileCfg); len(errs) > 0 {
-		log.Warn("Config file has issues", logger.F("path", configPath), logger.F("errors", errs.Error()))
 	}
 	log.Info("Using config", logger.F("path", configPath))
 	return fileCfg, nil

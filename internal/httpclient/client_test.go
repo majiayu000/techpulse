@@ -52,6 +52,11 @@ func TestNewWithOptions(t *testing.T) {
 	}
 }
 
+func testClient(opts ...Option) *Client {
+	base := []Option{WithAllowPrivateHosts(true)}
+	return New(append(base, opts...)...)
+}
+
 func TestGet(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -60,7 +65,7 @@ func TestGet(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New()
+	c := testClient()
 	resp, err := c.Get(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -78,7 +83,7 @@ func TestGetBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New()
+	c := testClient()
 	body, err := c.GetBody(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -103,7 +108,7 @@ func TestRetryOnServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:        3,
 		InitialDelay:      10 * time.Millisecond,
 		MaxDelay:          50 * time.Millisecond,
@@ -134,7 +139,7 @@ func TestNoRetryOnNonRetryableStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:        3,
 		InitialDelay:      10 * time.Millisecond,
 		MaxDelay:          50 * time.Millisecond,
@@ -161,7 +166,7 @@ func TestMaxRetriesExceeded(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:        2,
 		InitialDelay:      10 * time.Millisecond,
 		MaxDelay:          50 * time.Millisecond,
@@ -187,7 +192,7 @@ func TestContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New()
+	c := testClient()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
@@ -207,7 +212,7 @@ func TestUserAgentHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithUserAgent("CustomAgent/2.0"))
+	c := testClient(WithUserAgent("CustomAgent/2.0"))
 	resp, err := c.Get(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -238,7 +243,7 @@ func TestRetryRewindsRequestBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:        3,
 		InitialDelay:      10 * time.Millisecond,
 		MaxDelay:          50 * time.Millisecond,
@@ -246,7 +251,7 @@ func TestRetryRewindsRequestBody(t *testing.T) {
 		RetryableStatuses: []int{http.StatusServiceUnavailable},
 	}))
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewBufferString("payload-123"))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, bytes.NewBufferString("payload-123"))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -277,7 +282,7 @@ func TestNonReplayableRequestNotRetried(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:        3,
 		InitialDelay:      10 * time.Millisecond,
 		MaxDelay:          50 * time.Millisecond,
@@ -286,7 +291,7 @@ func TestNonReplayableRequestNotRetried(t *testing.T) {
 
 	// A manually assigned body has no GetBody, so the request cannot be
 	// replayed; it must be attempted exactly once.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -304,6 +309,41 @@ func TestNonReplayableRequestNotRetried(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&attempts); got != 1 {
 		t.Errorf("attempts = %d, want 1 (request cannot be replayed)", got)
+	}
+}
+
+func TestPostWithReplayableBodyNotRetried(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	c := testClient(WithRetryConfig(RetryConfig{
+		MaxRetries:        3,
+		InitialDelay:      10 * time.Millisecond,
+		MaxDelay:          50 * time.Millisecond,
+		RetryableStatuses: []int{http.StatusServiceUnavailable},
+	}))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewBufferString("payload"))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if req.GetBody == nil {
+		t.Fatal("test requires a replayable request body")
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("POST should return the response without retrying: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Fatalf("attempts = %d, want 1 for POST", got)
 	}
 }
 
@@ -363,7 +403,7 @@ func TestDoWithRetryDoesNotRetryCanceledContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:   3,
 		InitialDelay: 10 * time.Millisecond,
 		MaxDelay:     50 * time.Millisecond,
@@ -428,7 +468,7 @@ func TestRetryAfterOverridesBackoff(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(WithRetryConfig(RetryConfig{
+	c := testClient(WithRetryConfig(RetryConfig{
 		MaxRetries:        3,
 		InitialDelay:      10 * time.Millisecond,
 		MaxDelay:          150 * time.Millisecond,
@@ -452,15 +492,15 @@ func TestRetryAfterOverridesBackoff(t *testing.T) {
 }
 
 func TestGetBody_RejectsOversizedResponse(t *testing.T) {
-	big := bytes.Repeat([]byte("a"), MaxBodyBytes+1)
+	big := bytes.Repeat([]byte("a"), int(DefaultMaxResponseBytes)+1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(big)
 	}))
 	defer server.Close()
 
-	c := New()
+	c := testClient()
 	_, err := c.GetBody(context.Background(), server.URL)
-	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("expected size-limit error, got %v", err)
 	}
 }

@@ -17,12 +17,14 @@ import (
 	"time"
 )
 
-// Client is an HTTP client with retry and rate limiting support.
+// Client is an HTTP client with retry, rate limiting, and SSRF protections.
 type Client struct {
-	httpClient  *http.Client
-	retryConfig RetryConfig
-	rateLimiter *RateLimiter
-	userAgent   string
+	httpClient   *http.Client
+	retryConfig  RetryConfig
+	rateLimiter  *RateLimiter
+	userAgent    string
+	allowPrivate bool
+	maxBodyBytes int64
 }
 
 // Option configures the client.
@@ -63,20 +65,52 @@ func WithRateLimitConfig(cfg RateLimitConfig) Option {
 	}
 }
 
+// WithAllowPrivateHosts disables SSRF private/link-local blocking.
+// Intended for tests that use httptest on loopback. Do not enable in production.
+func WithAllowPrivateHosts(allow bool) Option {
+	return func(c *Client) {
+		c.allowPrivate = allow
+	}
+}
+
+// WithMaxResponseBytes overrides the GetBody size cap (default 5 MiB).
+// Values <= 0 keep the default.
+func WithMaxResponseBytes(n int64) Option {
+	return func(c *Client) {
+		if n > 0 {
+			c.maxBodyBytes = n
+		}
+	}
+}
+
 // New creates a new HTTP client with the given options.
+// SSRF protections (dial-time IP checks, redirect re-validation, body size
+// caps) are enabled by default.
 func New(opts ...Option) *Client {
 	c := &Client{
+		retryConfig:  DefaultRetryConfig(),
+		rateLimiter:  NewRateLimiter(DefaultRateLimitConfig()),
+		userAgent:    "TechPulse/1.0",
+		maxBodyBytes: DefaultMaxResponseBytes,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		retryConfig: DefaultRetryConfig(),
-		rateLimiter: NewRateLimiter(DefaultRateLimitConfig()),
-		userAgent:   "TechPulse/1.0",
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
+	c.applyTransport()
 	return c
+}
+
+func (c *Client) applyTransport() {
+	if c.allowPrivate {
+		c.httpClient.Transport = http.DefaultTransport
+		c.httpClient.CheckRedirect = nil
+		return
+	}
+	c.httpClient.Transport = ssrfTransport()
+	c.httpClient.CheckRedirect = checkRedirect
 }
 
 // Do executes an HTTP request with retry support.
@@ -86,22 +120,23 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 
 // DoWithRetry executes an HTTP request with retry and rate limiting support.
 //
-// A request is retried only if it can be replayed faithfully: either it has
-// no body or its GetBody function can regenerate the body. Requests whose
-// consumed body cannot be regenerated are never resent — resending them
-// would silently deliver an empty body. Caller cancellation and deadlines
-// are honored immediately and never retried. When a retryable response
-// carries a Retry-After header, it overrides the computed backoff (capped at
+// Only safe GET, HEAD, and OPTIONS requests are retried, and only when their
+// bodies can be replayed faithfully. Caller cancellation and deadlines are
+// honored immediately. Retry-After overrides the computed backoff (capped at
 // RetryConfig.MaxDelay).
 func (c *Client) DoWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
+	if err := c.validateRequestURL(req.URL); err != nil {
+		return nil, err
+	}
+
 	if c.userAgent != "" && req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 
-	// A consumed request body can only be resent when GetBody regenerates
-	// it; http.NewRequestWithContext sets GetBody for the common in-memory
-	// body types (*bytes.Buffer, *bytes.Reader, *strings.Reader).
-	replayable := req.Body == nil || req.GetBody != nil
+	// A regenerated body alone does not make a request safe to repeat: a POST
+	// may already have committed a side effect before a retryable response.
+	retryable := (req.Method == http.MethodGet || req.Method == http.MethodHead || req.Method == http.MethodOptions) &&
+		(req.Body == nil || req.GetBody != nil)
 
 	var lastErr error
 	var retryAfter time.Duration // server-suggested delay for the next attempt
@@ -138,14 +173,14 @@ func (c *Client) DoWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = err
-			if !replayable || !c.isRetryableError(err) {
+			if !retryable || !c.isRetryableError(err) {
 				return nil, err
 			}
 			continue
 		}
 
 		// Check if we should retry based on status code
-		if replayable &&
+		if retryable &&
 			c.retryConfig.ShouldRetry(resp.StatusCode) &&
 			attempt < c.retryConfig.MaxRetries {
 			retryAfter = retryAfterDelay(resp.Header, c.retryConfig.MaxDelay)
@@ -161,8 +196,8 @@ func (c *Client) DoWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 }
 
 // Get performs a GET request to the specified URL.
-func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (c *Client) Get(ctx context.Context, rawURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -170,8 +205,9 @@ func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
 }
 
 // GetBody performs a GET request and returns the response body.
-func (c *Client) GetBody(ctx context.Context, url string) ([]byte, error) {
-	resp, err := c.Get(ctx, url)
+// The body is capped at maxBodyBytes (default 5 MiB).
+func (c *Client) GetBody(ctx context.Context, rawURL string) ([]byte, error) {
+	resp, err := c.Get(ctx, rawURL)
 	if err != nil {
 		return nil, err
 	}
@@ -181,15 +217,25 @@ func (c *Client) GetBody(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	return ReadLimited(resp.Body)
+	limit := c.maxBodyBytes
+	if limit <= 0 {
+		limit = DefaultMaxResponseBytes
+	}
+	limited := io.LimitReader(resp.Body, limit+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("%w (%d bytes)", ErrResponseTooLarge, limit)
+	}
+	return body, nil
 }
 
-// MaxBodyBytes bounds how much of a remote response body is read into
-// memory; hostile or misconfigured servers can return unbounded bodies.
+// MaxBodyBytes bounds collector response bodies read by ReadLimited.
 const MaxBodyBytes = 20 << 20 // 20 MB
 
-// ReadLimited reads r fully but fails with an error when the payload
-// exceeds MaxBodyBytes, instead of exhausting memory.
+// ReadLimited reads a collector response but fails if it exceeds MaxBodyBytes.
 func ReadLimited(r io.Reader) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(r, MaxBodyBytes+1))
 	if err != nil {
@@ -201,12 +247,24 @@ func ReadLimited(r io.Reader) ([]byte, error) {
 	return data, nil
 }
 
+func (c *Client) validateRequestURL(u *url.URL) error {
+	if c.allowPrivate {
+		return nil
+	}
+	return ValidateURL(u)
+}
+
 // isRetryableError reports whether err should trigger another request attempt.
 // Only timeouts and temporary/network-transient failures are retryable.
-// context.Canceled, TLS/x509 certificate errors, and other permanent failures are not.
-// Preserves main #7 classification while retaining PR body-replay / Retry-After behavior.
+// SSRF policy failures, context.Canceled, TLS/x509 certificate errors, and
+// other permanent failures are not.
 func (c *Client) isRetryableError(err error) bool {
 	if err == nil {
+		return false
+	}
+
+	// SSRF policy failures must not be retried.
+	if errors.Is(err, ErrSSRFBlocked) || errors.Is(err, ErrInvalidScheme) || errors.Is(err, ErrTooManyRedirects) {
 		return false
 	}
 
