@@ -2,7 +2,7 @@
 package filter
 
 import (
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
 )
 
 // FilteredArticle represents an article with filtering metadata.

@@ -40,7 +40,7 @@ type Options struct {
 	Limit    int           // Maximum number of articles to collect
 	Since    time.Time     // Collect articles published after this time
 	Category string        // Category filter (source-specific)
-	Timeout  time.Duration // Request timeout
+	Timeout  time.Duration // Optional overall Collect deadline; zero means no Collect-level deadline (HTTP clients apply per-request timeouts)
 }
 
 // Result represents the outcome of a collection operation.
@@ -55,7 +55,6 @@ type Result struct {
 // DefaultOptions returns sensible default options.
 func DefaultOptions() Options {
 	return Options{
-		Limit:   30,
-		Timeout: 30 * time.Second,
+		Limit: 30,
 	}
 }

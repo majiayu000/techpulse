@@ -2,10 +2,11 @@ package summarizer
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
-	"github.com/anthropic/autonomous-runner/internal/filter"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/filter"
 )
 
 func TestNewBasicSummarizer(t *testing.T) {
@@ -74,6 +75,53 @@ func TestEnrich_Sorting(t *testing.T) {
 	}
 	if result[2].ID != "1" {
 		t.Errorf("expected ID '1' third, got %s", result[2].ID)
+	}
+}
+
+func TestEnrich_TieBreakDeterministic(t *testing.T) {
+	s := NewBasicSummarizer()
+
+	// All four articles score identically (no score/comments/keywords and
+	// sources matching no weight rule), so ordering is decided purely by the
+	// deterministic tie-breakers: source, then title.
+	articles := []filter.FilteredArticle{
+		{Article: collector.Article{ID: "1", Source: "zeta-blog", Title: "Beta Post"}},
+		{Article: collector.Article{ID: "2", Source: "alpha-blog", Title: "Zulu Post"}},
+		{Article: collector.Article{ID: "3", Source: "alpha-blog", Title: "Alpha Post"}},
+		{Article: collector.Article{ID: "4", Source: "mike-blog", Title: "Yankee Post"}},
+	}
+
+	tests := []struct {
+		name  string
+		input []filter.FilteredArticle
+	}{
+		{"as declared", articles},
+		{"reversed", []filter.FilteredArticle{articles[3], articles[2], articles[1], articles[0]}},
+		{"rotated", []filter.FilteredArticle{articles[2], articles[0], articles[3], articles[1]}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := s.Enrich(context.Background(), tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			for _, a := range result {
+				if a.Importance != 5.0 {
+					t.Errorf("article %s importance = %v, want 5.0 (test requires equal scores)", a.ID, a.Importance)
+				}
+			}
+
+			got := make([]string, 0, len(result))
+			for _, a := range result {
+				got = append(got, a.ID)
+			}
+			want := []string{"3", "2", "4", "1"} // source asc, then title asc
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("tie order = %v, want %v", got, want)
+			}
+		})
 	}
 }
 

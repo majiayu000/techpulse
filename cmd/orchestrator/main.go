@@ -15,10 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/config"
-	"github.com/anthropic/autonomous-runner/internal/memory"
-	"github.com/anthropic/autonomous-runner/internal/progress"
-	"github.com/anthropic/autonomous-runner/internal/worker"
+	"github.com/majiayu000/techpulse/internal/config"
+	"github.com/majiayu000/techpulse/internal/memory"
+	"github.com/majiayu000/techpulse/internal/progress"
+	"github.com/majiayu000/techpulse/internal/worker"
 )
 
 func main() {

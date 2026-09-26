@@ -1,6 +1,8 @@
 package github
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -21,7 +23,10 @@ func TestParser_Parse(t *testing.T) {
 	`
 
 	p := NewParser()
-	repos := p.Parse(html)
+	repos, err := p.Parse(html)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
 
 	if len(repos) != 1 {
 		t.Fatalf("Parse() got %d repos, want 1", len(repos))
@@ -65,7 +70,10 @@ func TestParser_ParseMultiple(t *testing.T) {
 	`
 
 	p := NewParser()
-	repos := p.Parse(html)
+	repos, err := p.Parse(html)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
 
 	if len(repos) != 3 {
 		t.Fatalf("Parse() got %d repos, want 3", len(repos))
@@ -74,7 +82,10 @@ func TestParser_ParseMultiple(t *testing.T) {
 
 func TestParser_ParseEmpty(t *testing.T) {
 	p := NewParser()
-	repos := p.Parse("")
+	repos, err := p.Parse("")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
 
 	if len(repos) != 0 {
 		t.Errorf("Parse() got %d repos, want 0", len(repos))
@@ -85,20 +96,49 @@ func TestParseNumber(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected int
+		wantErr  bool
 	}{
-		{"123", 123},
-		{"1,234", 1234},
-		{"12,345,678", 12345678},
-		{" 456 ", 456},
-		{"", 0},
-		{"abc", 0},
+		{"123", 123, false},
+		{"1,234", 1234, false},
+		{"12,345,678", 12345678, false},
+		{" 456 ", 456, false},
+		{"", 0, true},                      // unparsable: must error, not silently yield 0
+		{"abc", 0, true},                   // unparsable: must error, not silently yield 0
+		{strings.Repeat("9", 25), 0, true}, // overflows int64: must error, not clamp
 	}
 
 	for _, tt := range tests {
-		got := parseNumber(tt.input)
-		if got != tt.expected {
+		got, err := parseNumber(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("parseNumber(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if !tt.wantErr && got != tt.expected {
 			t.Errorf("parseNumber(%q) = %d, want %d", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestParser_ParseInvalidNumber(t *testing.T) {
+	// A star count too large for int64 must fail parsing instead of being
+	// silently clamped or zeroed.
+	html := fmt.Sprintf(`
+	<article class="Box-row">
+		<h2><a href="/owner/repo"></a></h2>
+		<a href="/owner/repo/stargazers">%s</a>
+	</article>
+	`, strings.Repeat("9", 25))
+
+	p := NewParser()
+	repos, err := p.Parse(html)
+	if err == nil {
+		t.Fatalf("Parse() expected error for unparsable star count, got repos=%v", repos)
+	}
+	if !strings.Contains(err.Error(), "invalid number") {
+		t.Errorf("Parse() error = %v, want it to mention the invalid number", err)
+	}
+	if repos != nil {
+		t.Errorf("Parse() repos = %v, want nil on error", repos)
 	}
 }
 
@@ -125,16 +165,21 @@ func TestExtractStarsToday(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected int
+		wantErr  bool
 	}{
-		{"123 stars today", 123},
-		{"1,234 stars today", 1234},
-		{"456 stars this week", 456},
-		{"789 stars this month", 789},
-		{"no stars", 0},
+		{"123 stars today", 123, false},
+		{"1,234 stars today", 1234, false},
+		{"456 stars this week", 456, false},
+		{"789 stars this month", 789, false},
+		{"no stars", 0, false}, // no match is not an error: field is simply absent
 	}
 
 	for _, tt := range tests {
-		got := extractStarsToday(tt.input)
+		got, err := extractStarsToday(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("extractStarsToday(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
 		if got != tt.expected {
 			t.Errorf("extractStarsToday(%q) = %d, want %d", tt.input, got, tt.expected)
 		}

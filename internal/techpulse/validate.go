@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/anthropic/autonomous-runner/internal/httpclient"
+	"github.com/majiayu000/techpulse/internal/httpclient"
 )
 
 // ValidationError represents a configuration validation error.
@@ -62,6 +62,13 @@ func ValidateConfig(cfg Config) ValidationErrors {
 		})
 	}
 
+	if cfg.RetentionDays < 0 || cfg.RetentionDays > 3650 {
+		errs = append(errs, ValidationError{
+			Field:   "retention_days",
+			Message: "must be between 0 and 3650 (0 disables cleanup)",
+		})
+	}
+
 	if cfg.Output == "" {
 		errs = append(errs, ValidationError{
 			Field:   "output",
@@ -103,6 +110,13 @@ func ValidateFileConfig(cfg *FileConfig) ValidationErrors {
 		errs = append(errs, ValidationError{
 			Field:   "timeout",
 			Message: "must be between 0 and 300 seconds (0 uses default)",
+		})
+	}
+
+	if cfg.RetentionDays != nil && (*cfg.RetentionDays < 0 || *cfg.RetentionDays > 3650) {
+		errs = append(errs, ValidationError{
+			Field:   "retention_days",
+			Message: "must be between 0 and 3650 (0 disables cleanup)",
 		})
 	}
 

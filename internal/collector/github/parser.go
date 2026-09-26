@@ -1,9 +1,28 @@
 package github
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+)
+
+// Compiled once at package init: parseArticle runs ~11 patterns per repo
+// block and Parse handles ~25 repos per run, so per-call compilation is a
+// measurable waste.
+var (
+	articleBlockRe     = regexp.MustCompile(`(?s)<article[^>]*class="[^"]*Box-row[^"]*"[^>]*>(.*?)</article>`)
+	repoNameHeadingRe  = regexp.MustCompile(`<h2[^>]*>[\s\S]*?href="/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)"`)
+	repoNameLinkRe     = regexp.MustCompile(`href="/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)"[^>]*class="[^"]*Link`)
+	descriptionRe      = regexp.MustCompile(`(?s)<p[^>]*class="[^"]*col-9[^"]*"[^>]*>(.*?)</p>`)
+	languageRe         = regexp.MustCompile(`<span[^>]*itemprop="programmingLanguage"[^>]*>([^<]+)</span>`)
+	stargazersSVGRe    = regexp.MustCompile(`(?s)href="/[^/]+/[^/]+/stargazers"[^>]*>.*?</svg>\s*([0-9,]+)\s*</a>`)
+	stargazersLegacyRe = regexp.MustCompile(`href="/[^/]+/[^/]+/stargazers"[^>]*>\s*([0-9,]+)`)
+	forksSVGRe         = regexp.MustCompile(`(?s)href="/[^/]+/[^/]+/forks"[^>]*>.*?</svg>\s*([0-9,]+)\s*</a>`)
+	forksLegacyRe      = regexp.MustCompile(`href="/[^/]+/[^/]+/forks"[^>]*>\s*([0-9,]+)`)
+	starsTodayRe       = regexp.MustCompile(`([0-9,]+)\s*stars?\s*(today|this week|this month)`)
+	stripTagsRe        = regexp.MustCompile(`<[^>]+>`)
+	collapseSpaceRe    = regexp.MustCompile(`\s+`)
 )
 
 // Parser parses GitHub trending HTML page.
@@ -14,27 +33,32 @@ func NewParser() *Parser {
 	return &Parser{}
 }
 
-// Parse extracts repositories from HTML content.
-func (p *Parser) Parse(html string) []Repository {
+// Parse extracts repositories from HTML content. It returns an error if any
+// numeric field in an article block cannot be parsed, rather than silently
+// treating it as zero.
+func (p *Parser) Parse(html string) ([]Repository, error) {
 	var repos []Repository
 
 	// Find all article elements (each trending repo)
 	articles := findAllArticles(html)
 
-	for _, article := range articles {
-		repo := p.parseArticle(article)
+	for i, article := range articles {
+		repo, err := p.parseArticle(article)
+		if err != nil {
+			return nil, fmt.Errorf("parse article %d: %w", i, err)
+		}
 		if repo.Name != "" {
 			repos = append(repos, repo)
 		}
 	}
 
-	return repos
+	return repos, nil
 }
 
 // findAllArticles extracts article HTML blocks from the page.
 func findAllArticles(html string) []string {
 	var articles []string
-	re := regexp.MustCompile(`(?s)<article[^>]*class="[^"]*Box-row[^"]*"[^>]*>(.*?)</article>`)
+	re := articleBlockRe
 	matches := re.FindAllStringSubmatch(html, -1)
 	for _, m := range matches {
 		if len(m) > 1 {
@@ -45,27 +69,42 @@ func findAllArticles(html string) []string {
 }
 
 // parseArticle parses a single article HTML block.
-func (p *Parser) parseArticle(html string) Repository {
+func (p *Parser) parseArticle(html string) (Repository, error) {
+	stars, err := extractStars(html)
+	if err != nil {
+		return Repository{}, fmt.Errorf("stars: %w", err)
+	}
+
+	starsToday, err := extractStarsToday(html)
+	if err != nil {
+		return Repository{}, fmt.Errorf("stars today: %w", err)
+	}
+
+	forks, err := extractForks(html)
+	if err != nil {
+		return Repository{}, fmt.Errorf("forks: %w", err)
+	}
+
 	return Repository{
 		Name:        extractRepoName(html),
 		URL:         extractRepoURL(html),
 		Description: extractDescription(html),
 		Language:    extractLanguage(html),
-		Stars:       extractStars(html),
-		StarsToday:  extractStarsToday(html),
-		Forks:       extractForks(html),
-	}
+		Stars:       stars,
+		StarsToday:  starsToday,
+		Forks:       forks,
+	}, nil
 }
 
 // extractRepoName extracts "owner/repo" from HTML.
 func extractRepoName(html string) string {
 	// Pattern for h2 heading with link to repo (2024+ structure)
-	re := regexp.MustCompile(`<h2[^>]*>[\s\S]*?href="/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)"`)
+	re := repoNameHeadingRe
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return strings.TrimSpace(m[1])
 	}
 	// Fallback: any link matching owner/repo pattern
-	re = regexp.MustCompile(`href="/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)"[^>]*class="[^"]*Link`)
+	re = repoNameLinkRe
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return strings.TrimSpace(m[1])
 	}
@@ -83,7 +122,7 @@ func extractRepoURL(html string) string {
 
 // extractDescription extracts the repo description.
 func extractDescription(html string) string {
-	re := regexp.MustCompile(`(?s)<p[^>]*class="[^"]*col-9[^"]*"[^>]*>(.*?)</p>`)
+	re := descriptionRe
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return cleanText(m[1])
 	}
@@ -92,7 +131,7 @@ func extractDescription(html string) string {
 
 // extractLanguage extracts the primary programming language.
 func extractLanguage(html string) string {
-	re := regexp.MustCompile(`<span[^>]*itemprop="programmingLanguage"[^>]*>([^<]+)</span>`)
+	re := languageRe
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return strings.TrimSpace(m[1])
 	}
@@ -100,58 +139,60 @@ func extractLanguage(html string) string {
 }
 
 // extractStars extracts total star count.
-func extractStars(html string) int {
+func extractStars(html string) (int, error) {
 	// Pattern 1: stargazers link with SVG, then number before </a> (2024+ structure)
-	re := regexp.MustCompile(`(?s)href="/[^/]+/[^/]+/stargazers"[^>]*>.*?</svg>\s*([0-9,]+)\s*</a>`)
+	re := stargazersSVGRe
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return parseNumber(m[1])
 	}
 	// Pattern 2: simple stargazers link with direct number (legacy)
-	re = regexp.MustCompile(`href="/[^/]+/[^/]+/stargazers"[^>]*>\s*([0-9,]+)`)
+	re = stargazersLegacyRe
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return parseNumber(m[1])
 	}
-	return 0
+	return 0, nil
 }
 
 // extractForks extracts fork count.
-func extractForks(html string) int {
+func extractForks(html string) (int, error) {
 	// Pattern 1: forks link with SVG, then number before </a> (2024+ structure)
-	re := regexp.MustCompile(`(?s)href="/[^/]+/[^/]+/forks"[^>]*>.*?</svg>\s*([0-9,]+)\s*</a>`)
+	re := forksSVGRe
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return parseNumber(m[1])
 	}
 	// Pattern 2: simple forks link with direct number (legacy)
-	re = regexp.MustCompile(`href="/[^/]+/[^/]+/forks"[^>]*>\s*([0-9,]+)`)
+	re = forksLegacyRe
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return parseNumber(m[1])
 	}
-	return 0
+	return 0, nil
 }
 
 // extractStarsToday extracts stars gained today.
-func extractStarsToday(html string) int {
-	re := regexp.MustCompile(`([0-9,]+)\s*stars?\s*(today|this week|this month)`)
+func extractStarsToday(html string) (int, error) {
+	re := starsTodayRe
 	if m := re.FindStringSubmatch(html); len(m) > 1 {
 		return parseNumber(m[1])
 	}
-	return 0
+	return 0, nil
 }
 
-// parseNumber converts string with commas to int.
-func parseNumber(s string) int {
+// parseNumber converts a comma-separated numeric string to an int. It returns
+// an error for unparsable input instead of silently yielding zero.
+func parseNumber(s string) (int, error) {
 	s = strings.ReplaceAll(s, ",", "")
 	s = strings.TrimSpace(s)
-	n, _ := strconv.Atoi(s)
-	return n
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number %q: %w", s, err)
+	}
+	return n, nil
 }
 
 // cleanText removes HTML tags and extra whitespace.
 func cleanText(s string) string {
-	re := regexp.MustCompile(`<[^>]+>`)
-	s = re.ReplaceAllString(s, "")
+	s = stripTagsRe.ReplaceAllString(s, "")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.TrimSpace(s)
-	re = regexp.MustCompile(`\s+`)
-	return re.ReplaceAllString(s, " ")
+	return collapseSpaceRe.ReplaceAllString(s, " ")
 }

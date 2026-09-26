@@ -3,7 +3,7 @@ package filter
 import (
 	"testing"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
 )
 
 func TestKeywordFilter_Name(t *testing.T) {
@@ -125,6 +125,66 @@ func TestKeywordFilter_EmptyInclude(t *testing.T) {
 	// With no include keywords, all articles pass
 	if len(result) != 2 {
 		t.Errorf("expected 2 articles (no filter), got %d", len(result))
+	}
+}
+
+func TestKeywordFilter_SingleWordKeywordsUseWordBoundaries(t *testing.T) {
+	include := []string{"Go", "AI"}
+	f := NewKeywordFilter(include, nil)
+
+	articles := []collector.Article{
+		createTestArticle("1", "Go 1.22 ships with new features", ""),   // standalone token: match
+		createTestArticle("2", "Google Docs rolls out dark mode", ""),   // "Go" inside "Google": no match
+		createTestArticle("3", "AI chip demand surges", ""),             // standalone token: match
+		createTestArticle("4", "The email said nothing important", ""),  // "ai" inside email/said: no match
+		createTestArticle("5", "AI-powered tooling gains traction", ""), // hyphen is a boundary: match
+	}
+
+	result := f.Apply(articles)
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 matched articles with boundary matching, got %d", len(result))
+	}
+	for _, r := range result {
+		if r.ID == "2" || r.ID == "4" {
+			t.Errorf("article %s should not have matched (substring false positive)", r.ID)
+		}
+	}
+}
+
+func TestKeywordFilter_CompoundWordsDoNotMatchSingleKeywords(t *testing.T) {
+	// Documented trade-off: compounds like Golang do not trigger the
+	// single-word keyword "Go"; such products need their own keyword.
+	include := []string{"Go"}
+	f := NewKeywordFilter(include, nil)
+
+	articles := []collector.Article{
+		createTestArticle("1", "Golang concurrency patterns explained", ""),
+	}
+
+	result := f.Apply(articles)
+
+	if len(result) != 0 {
+		t.Errorf("expected 'Golang' not to match keyword 'Go' (standalone-token rule), got %d matches", len(result))
+	}
+}
+
+func TestKeywordFilter_PhrasesRemainSubstringMatches(t *testing.T) {
+	// Phrases stay unanchored so plural/suffixed forms still match.
+	include := []string{"large language model"}
+	f := NewKeywordFilter(include, nil)
+
+	articles := []collector.Article{
+		createTestArticle("1", "Top Large Language Models of 2026", ""),
+	}
+
+	result := f.Apply(articles)
+
+	if len(result) != 1 {
+		t.Errorf("expected phrase keyword to match suffixed form, got %d matches", len(result))
+	}
+	if len(result[0].MatchedKeywords) != 1 || result[0].MatchedKeywords[0] != "large language model" {
+		t.Errorf("expected matched keyword reported as-is, got %v", result[0].MatchedKeywords)
 	}
 }
 
@@ -253,5 +313,24 @@ func TestDefaultKeywords_ContainsNegativeFilters(t *testing.T) {
 		if !found {
 			t.Errorf("expected '%s' in default exclude keywords", neg)
 		}
+	}
+}
+
+func TestKeywordFilter_MatchCJKInclude(t *testing.T) {
+	// Regression: Go's \b is an ASCII-only boundary, so anchoring
+	// non-ASCII keywords used to make them unmatchable, silently dropping
+	// every article when the include list held only CJK terms.
+	include := []string{"人工智能", "机器学习"}
+	f := NewKeywordFilter(include, nil)
+
+	articles := []collector.Article{
+		createTestArticle("1", "华为发布人工智能芯片", ""),
+		createTestArticle("2", "机器学习入门教程", ""),
+		createTestArticle("3", "How to cook pasta", ""),
+	}
+
+	result := f.Apply(articles)
+	if len(result) != 2 {
+		t.Errorf("expected 2 matched CJK articles, got %d", len(result))
 	}
 }

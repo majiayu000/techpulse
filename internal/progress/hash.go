@@ -3,7 +3,7 @@ package progress
 import (
 	"fmt"
 
-	"github.com/anthropic/autonomous-runner/internal/memory"
+	"github.com/majiayu000/techpulse/internal/memory"
 )
 
 // HashDetector 基于文件哈希检测进展

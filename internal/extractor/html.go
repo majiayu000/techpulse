@@ -22,9 +22,6 @@ var (
 	// Remove remaining HTML tags
 	tagRe = regexp.MustCompile(`<[^>]+>`)
 
-	// HTML entities
-	entityRe = regexp.MustCompile(`&[a-zA-Z]+;|&#\d+;`)
-
 	// Multiple whitespace
 	whitespaceRe = regexp.MustCompile(`\s+`)
 )
@@ -68,34 +65,34 @@ func extractTextFromHTML(html string) string {
 	return strings.TrimSpace(text)
 }
 
-// decodeHTMLEntities converts common HTML entities to their characters.
+// htmlEntityPairs decodes common HTML entities. Order does not affect the
+// result because strings.Replacer performs a single leftmost pass over the
+// input and never rescans its own output, so "&amp;lt;" always decodes to
+// "&lt;" — never to "<" — regardless of pair order.
+var htmlEntityPairs = []string{
+	"&nbsp;", " ",
+	"&amp;", "&",
+	"&lt;", "<",
+	"&gt;", ">",
+	"&quot;", "\"",
+	"&apos;", "'",
+	"&#39;", "'",
+	"&mdash;", "-",
+	"&ndash;", "-",
+	"&rsquo;", "'",
+	"&lsquo;", "'",
+	"&rdquo;", "\"",
+	"&ldquo;", "\"",
+	"&hellip;", "...",
+}
+
+var entityReplacer = strings.NewReplacer(htmlEntityPairs...)
+
+// decodeHTMLEntities converts common HTML entities to their characters in a
+// single ordered pass. Unknown entities (e.g. "&eacute;") are left intact
+// rather than being silently deleted.
 func decodeHTMLEntities(s string) string {
-	entities := map[string]string{
-		"&nbsp;":   " ",
-		"&amp;":    "&",
-		"&lt;":     "<",
-		"&gt;":     ">",
-		"&quot;":   "\"",
-		"&apos;":   "'",
-		"&#39;":    "'",
-		"&mdash;":  "-",
-		"&ndash;":  "-",
-		"&rsquo;":  "'",
-		"&lsquo;":  "'",
-		"&rdquo;":  "\"",
-		"&ldquo;":  "\"",
-		"&hellip;": "...",
-	}
-
-	result := s
-	for entity, char := range entities {
-		result = strings.ReplaceAll(result, entity, char)
-	}
-
-	// Remove any remaining entities
-	result = entityRe.ReplaceAllString(result, " ")
-
-	return result
+	return entityReplacer.Replace(s)
 }
 
 // cleanText removes noise and normalizes text for display.

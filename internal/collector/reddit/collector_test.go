@@ -3,12 +3,15 @@ package reddit
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
 )
 
 func TestCollector_Name(t *testing.T) {
@@ -170,6 +173,93 @@ func TestCollector_Limit(t *testing.T) {
 	}
 }
 
+func TestCollector_AllSubredditsFail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	c := NewWithBaseURL(server.URL, []Subreddit{{Name: "one"}, {Name: "two"}})
+
+	articles, err := c.Collect(context.Background(), collector.Options{Limit: 10})
+	if err == nil {
+		t.Fatal("expected error when all subreddits fail, got nil")
+	}
+	if len(articles) != 0 {
+		t.Errorf("expected no articles when all subreddits fail, got %d", len(articles))
+	}
+	for _, name := range []string{"one", "two"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error should name failed subreddit %q, got: %v", name, err)
+		}
+	}
+}
+
+func TestCollector_PartialFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/bad/") {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		response := ListingResponse{}
+		response.Data.Children = append(response.Data.Children, struct {
+			Data Post `json:"data"`
+		}{Data: Post{ID: "goodpost", Title: "Good Post", Created: float64(time.Now().Unix()), Subreddit: "good"}})
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	c := NewWithBaseURL(server.URL, []Subreddit{{Name: "good"}, {Name: "bad"}})
+
+	articles, err := c.Collect(context.Background(), collector.Options{Limit: 10})
+	if err != nil {
+		t.Fatalf("partial failure should be non-fatal, got error: %v", err)
+	}
+	if len(articles) != 1 {
+		t.Fatalf("expected 1 article from healthy subreddit, got %d", len(articles))
+	}
+	if articles[0].Metadata["subreddit"] != "good" {
+		t.Errorf("expected article from 'good' subreddit, got %q", articles[0].Metadata["subreddit"])
+	}
+}
+
+func TestCollector_LimitInterleavesSubreddits(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		sub := parts[1]
+		response := ListingResponse{}
+		for i := 0; i < 4; i++ {
+			response.Data.Children = append(response.Data.Children, struct {
+				Data Post `json:"data"`
+			}{Data: Post{
+				ID:      fmt.Sprintf("%s%d", sub, i),
+				Title:   fmt.Sprintf("%s post %d", sub, i),
+				Created: float64(time.Now().Unix()),
+			}})
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	subs := []Subreddit{{Name: "aaa"}, {Name: "bbb"}, {Name: "ccc"}}
+	c := NewWithBaseURL(server.URL, subs)
+
+	articles, err := c.Collect(context.Background(), collector.Options{Limit: 6})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	wantIDs := []string{"aaa0", "bbb0", "ccc0", "aaa1", "bbb1", "ccc1"}
+	if len(articles) != len(wantIDs) {
+		t.Fatalf("expected %d articles, got %d", len(wantIDs), len(articles))
+	}
+	for i, want := range wantIDs {
+		if articles[i].SourceID != want {
+			t.Errorf("articles[%d].SourceID = %q, want %q", i, articles[i].SourceID, want)
+		}
+	}
+}
+
 func TestPost_CreatedTime(t *testing.T) {
 	p := Post{Created: 1704067200}
 	expected := time.Unix(1704067200, 0)
@@ -187,12 +277,18 @@ func TestTruncateContent(t *testing.T) {
 		{"short", 10, "short"},
 		{"this is a long string", 10, "this is a ..."},
 		{"", 10, ""},
+		{"你好世界", 3, "你好世..."},                                          // multi-byte runes truncated at rune boundary
+		{"日本語テスト", 10, "日本語テスト"},                                       // byte length exceeds maxLen but rune count does not: unchanged
+		{strings.Repeat("é", 15), 10, strings.Repeat("é", 10) + "..."}, // 2-byte runes split mid-character before fix
 	}
 
 	for _, tt := range tests {
 		got := truncateContent(tt.input, tt.maxLen)
 		if got != tt.want {
 			t.Errorf("truncateContent(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("truncateContent(%q, %d) = %q, which is not valid UTF-8", tt.input, tt.maxLen, got)
 		}
 	}
 }

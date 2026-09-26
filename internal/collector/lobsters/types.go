@@ -5,20 +5,20 @@ import "time"
 
 // Story represents a story from Lobsters.
 type Story struct {
-	ShortID         string    `json:"short_id"`
-	Title           string    `json:"title"`
-	URL             string    `json:"url"`
-	CreatedAt       time.Time `json:"created_at"`
-	Score           int       `json:"score"`
-	Flags           int       `json:"flags"`
-	CommentCount    int       `json:"comment_count"`
-	SubmitterUser   string    `json:"submitter_user"`
-	UserIsAuthor    bool      `json:"user_is_author"`
-	Description     string    `json:"description"`
-	DescriptionPlain string   `json:"description_plain"`
-	Tags            []string  `json:"tags"`
-	ShortIDURL      string    `json:"short_id_url"`
-	CommentsURL     string    `json:"comments_url"`
+	ShortID          string    `json:"short_id"`
+	Title            string    `json:"title"`
+	URL              string    `json:"url"`
+	CreatedAt        time.Time `json:"created_at"`
+	Score            int       `json:"score"`
+	Flags            int       `json:"flags"`
+	CommentCount     int       `json:"comment_count"`
+	SubmitterUser    string    `json:"submitter_user"`
+	UserIsAuthor     bool      `json:"user_is_author"`
+	Description      string    `json:"description"`
+	DescriptionPlain string    `json:"description_plain"`
+	Tags             []string  `json:"tags"`
+	ShortIDURL       string    `json:"short_id_url"`
+	CommentsURL      string    `json:"comments_url"`
 }
 
 // FeedType represents the type of Lobsters feed.

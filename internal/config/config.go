@@ -13,20 +13,20 @@ import (
 // Config 运行配置
 type Config struct {
 	// 限制条件
-	MaxIterations        int           `yaml:"max_iterations"`
-	MaxCostUSD           float64       `yaml:"max_cost_usd"`
-	MaxDuration          time.Duration `yaml:"max_duration"`
-	ConsecutiveNoProgress int          `yaml:"consecutive_no_progress"`
-	StopWhenEmpty        bool          `yaml:"stop_when_empty"`
+	MaxIterations         int           `yaml:"max_iterations"`
+	MaxCostUSD            float64       `yaml:"max_cost_usd"`
+	MaxDuration           time.Duration `yaml:"max_duration"`
+	ConsecutiveNoProgress int           `yaml:"consecutive_no_progress"`
+	StopWhenEmpty         bool          `yaml:"stop_when_empty"`
 
 	// 执行参数
 	CooldownDuration time.Duration `yaml:"cooldown_duration"`
 	WorkerTimeout    time.Duration `yaml:"worker_timeout"`
 
 	// 路径
-	MemoryDir   string `yaml:"memory_dir"`
+	MemoryDir    string `yaml:"memory_dir"`
 	WorkspaceDir string `yaml:"workspace_dir"`
-	LogDir      string `yaml:"log_dir"`
+	LogDir       string `yaml:"log_dir"`
 
 	// 进展检测
 	UseGitDetection bool `yaml:"use_git_detection"`

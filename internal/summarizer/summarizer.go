@@ -4,7 +4,7 @@ package summarizer
 import (
 	"context"
 
-	"github.com/anthropic/autonomous-runner/internal/filter"
+	"github.com/majiayu000/techpulse/internal/filter"
 )
 
 // EnrichedArticle represents an article with AI-generated enhancements.
@@ -35,7 +35,8 @@ type Report struct {
 
 // Stats contains collection statistics.
 type Stats struct {
-	TotalArticles int
-	BySource      map[string]int
-	AvgImportance float64
+	TotalArticles   int
+	BySource        map[string]int
+	AvgImportance   float64
+	SummaryFailures int // Articles whose summary extraction produced no result in the last run
 }

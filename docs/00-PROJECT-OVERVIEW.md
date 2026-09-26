@@ -26,8 +26,10 @@ go build -o techpulse ./cmd/techpulse
 
 ### 清理旧数据
 
+默认不会自动删除归档。要在每次收集后清理超过 30 天的归档，运行：
+
 ```bash
-./techpulse -cleanup -retention 30
+./techpulse --retention-days 30
 ```
 
 ## 命令行参数
@@ -39,13 +41,12 @@ go build -o techpulse ./cmd/techpulse
 | `-storage` | .techpulse | 存储目录 |
 | `-limit` | 50 | 每个数据源的最大收集数量 |
 | `-threshold` | 6.0 | 重要性阈值 (0-10) |
-| `-cleanup` | false | 清理旧归档 |
-| `-retention` | 30 | 归档保留天数 |
+| `--retention-days` | 0 | 归档保留天数；0 表示不自动删除 |
 
 ## 项目结构
 
 ```
-auto-run-agent/
+techpulse/
 ├── cmd/
 │   └── techpulse/              # TechPulse CLI 入口
 │       └── main.go

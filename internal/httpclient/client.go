@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -117,6 +119,11 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 }
 
 // DoWithRetry executes an HTTP request with retry and rate limiting support.
+//
+// Only safe GET, HEAD, and OPTIONS requests are retried, and only when their
+// bodies can be replayed faithfully. Caller cancellation and deadlines are
+// honored immediately. Retry-After overrides the computed backoff (capped at
+// RetryConfig.MaxDelay).
 func (c *Client) DoWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if err := c.validateRequestURL(req.URL); err != nil {
 		return nil, err
@@ -126,14 +133,33 @@ func (c *Client) DoWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 
+	// A regenerated body alone does not make a request safe to repeat: a POST
+	// may already have committed a side effect before a retryable response.
+	retryable := (req.Method == http.MethodGet || req.Method == http.MethodHead || req.Method == http.MethodOptions) &&
+		(req.Body == nil || req.GetBody != nil)
+
 	var lastErr error
+	var retryAfter time.Duration // server-suggested delay for the next attempt
 	for attempt := 0; attempt <= c.retryConfig.MaxRetries; attempt++ {
 		if attempt > 0 {
-			delay := c.retryConfig.CalculateDelay(attempt - 1)
+			delay := retryAfter
+			retryAfter = 0
+			if delay <= 0 {
+				delay = c.retryConfig.CalculateDelay(attempt - 1)
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-time.After(delay):
+			}
+
+			// Rewind the request body so the retry sends the full payload.
+			if req.Body != nil {
+				body, err := req.GetBody()
+				if err != nil {
+					return nil, fmt.Errorf("regenerate request body for retry: %w", err)
+				}
+				req.Body = body
 			}
 		}
 
@@ -147,14 +173,17 @@ func (c *Client) DoWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = err
-			if !c.isRetryableError(err) {
+			if !retryable || !c.isRetryableError(err) {
 				return nil, err
 			}
 			continue
 		}
 
 		// Check if we should retry based on status code
-		if c.retryConfig.ShouldRetry(resp.StatusCode) && attempt < c.retryConfig.MaxRetries {
+		if retryable &&
+			c.retryConfig.ShouldRetry(resp.StatusCode) &&
+			attempt < c.retryConfig.MaxRetries {
+			retryAfter = retryAfterDelay(resp.Header, c.retryConfig.MaxDelay)
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("retryable status: %d", resp.StatusCode)
 			continue
@@ -203,6 +232,21 @@ func (c *Client) GetBody(ctx context.Context, rawURL string) ([]byte, error) {
 	return body, nil
 }
 
+// MaxBodyBytes bounds collector response bodies read by ReadLimited.
+const MaxBodyBytes = 20 << 20 // 20 MB
+
+// ReadLimited reads a collector response but fails if it exceeds MaxBodyBytes.
+func ReadLimited(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, MaxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxBodyBytes {
+		return nil, fmt.Errorf("response body exceeds %d bytes", MaxBodyBytes)
+	}
+	return data, nil
+}
+
 func (c *Client) validateRequestURL(u *url.URL) error {
 	if c.allowPrivate {
 		return nil
@@ -240,6 +284,11 @@ func (c *Client) isRetryableError(err error) bool {
 	// Permanent TLS / certificate failures must not be retried.
 	if isPermanentTLSError(err) {
 		return false
+	}
+
+	// Peer closed an idle persistent connection — commonly transient.
+	if errors.Is(err, io.EOF) {
+		return true
 	}
 
 	var netErr net.Error
@@ -311,9 +360,38 @@ func isTransientSyscallError(err error) bool {
 func isRetryableErrno(errno syscall.Errno) bool {
 	switch errno {
 	case syscall.ECONNRESET, syscall.ECONNREFUSED, syscall.ECONNABORTED,
-		syscall.EPIPE, syscall.ETIMEDOUT, syscall.EHOSTUNREACH, syscall.ENETUNREACH:
+		syscall.EPIPE, syscall.ETIMEDOUT, syscall.EHOSTUNREACH, syscall.ENETUNREACH,
+		syscall.ENETDOWN:
 		return true
 	default:
 		return false
+	}
+}
+
+// retryAfterDelay extracts the delay requested by a Retry-After header
+// (seconds or HTTP-date form). It returns 0 when the header is absent,
+// malformed, or already past — the caller then falls back to its own
+// exponential backoff. The result is capped at maxDelay so a hostile or
+// misconfigured server cannot stall the caller indefinitely.
+func retryAfterDelay(h http.Header, maxDelay time.Duration) time.Duration {
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	var d time.Duration
+	if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+		d = time.Duration(secs) * time.Second
+	} else if t, err := http.ParseTime(v); err == nil {
+		if until := time.Until(t); until > 0 {
+			d = until
+		}
+	}
+	switch {
+	case d <= 0:
+		return 0
+	case d > maxDelay:
+		return maxDelay
+	default:
+		return d
 	}
 }

@@ -3,33 +3,84 @@ package filter
 import (
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
 )
 
 // KeywordFilter filters articles based on keyword matching.
 type KeywordFilter struct {
 	include  []string
 	exclude  []string
-	patterns []*regexp.Regexp
+	patterns []keywordPattern
+}
+
+// keywordPattern pairs a compiled include pattern with the keyword that
+// produced it, keeping MatchedKeywords aligned even if some patterns are
+// skipped at compile time.
+type keywordPattern struct {
+	keyword string
+	re      *regexp.Regexp
 }
 
 // NewKeywordFilter creates a new keyword filter.
+//
+// Single-word keywords are compiled with word boundaries ((?i)\bkw\b) so
+// they only match standalone tokens: without boundaries "Go" matched
+// "Google", "AI" matched the "ai" inside "email"/"said", letting nearly
+// every English article through. The deliberate trade-off is that compound
+// tech words do NOT trigger their parts — "Golang" does not match "Go",
+// "OpenAI" does not match "AI" — because bare-substring matching flooded
+// results with false positives (each one inflating importance); such
+// products should get their own keyword instead. Multi-word phrase keywords
+// stay unanchored substrings ("large language model" still matches
+// "Large Language Models") since phrases are already specific enough.
 func NewKeywordFilter(include, exclude []string) *KeywordFilter {
 	f := &KeywordFilter{
 		include: include,
 		exclude: exclude,
 	}
 
-	// Pre-compile regex patterns for include keywords
 	for _, kw := range include {
-		pattern, err := regexp.Compile("(?i)" + regexp.QuoteMeta(kw))
-		if err == nil {
-			f.patterns = append(f.patterns, pattern)
+		if pattern := compileIncludePattern(kw); pattern != nil {
+			f.patterns = append(f.patterns, keywordPattern{keyword: kw, re: pattern})
 		}
 	}
 
 	return f
+}
+
+// compileIncludePattern compiles an include keyword to a case-insensitive
+// regexp, anchored with \b on the sides that start/end with a word rune.
+// It returns nil if the keyword cannot be compiled.
+func compileIncludePattern(kw string) *regexp.Regexp {
+	isWordRune := func(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
+	// Go's \b matches only between an ASCII word char and a non-word char,
+	// so anchoring a keyword whose edge rune is non-ASCII (CJK etc.) would
+	// make the pattern unmatchable. Only anchor ASCII-word edges; other
+	// keywords fall back to substring matching.
+	isASCIIWordEdge := func(r rune) bool { return r <= utf8.RuneSelf && r != utf8.RuneError && isWordRune(r) }
+
+	first, _ := utf8.DecodeRuneInString(kw)
+	last, _ := utf8.DecodeLastRuneInString(kw)
+	phrase := strings.IndexFunc(kw, unicode.IsSpace) >= 0
+
+	var b strings.Builder
+	b.WriteString("(?i)")
+	if !phrase && isASCIIWordEdge(first) {
+		b.WriteString(`\b`)
+	}
+	b.WriteString(regexp.QuoteMeta(kw))
+	if !phrase && isASCIIWordEdge(last) {
+		b.WriteString(`\b`)
+	}
+
+	pattern, err := regexp.Compile(b.String())
+	if err != nil {
+		return nil
+	}
+	return pattern
 }
 
 // DefaultKeywords returns common tech/AI keywords including phrases.
@@ -93,9 +144,9 @@ func (f *KeywordFilter) matchKeywords(a collector.Article) []string {
 	text := strings.ToLower(a.Title + " " + a.Content)
 	var matched []string
 
-	for i, pattern := range f.patterns {
-		if pattern.MatchString(text) {
-			matched = append(matched, f.include[i])
+	for _, p := range f.patterns {
+		if p.re.MatchString(text) {
+			matched = append(matched, p.keyword)
 		}
 	}
 

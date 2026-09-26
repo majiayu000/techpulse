@@ -3,7 +3,9 @@ package progress
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,109 +13,129 @@ import (
 	"strings"
 )
 
-// GitDetector 基于 Git 检测代码变化
+// GitDetector reports changes since Reset, including edits to already-dirty files.
 type GitDetector struct {
-	workspaceDir    string
-	lastCommit      string
-	baselineStatus  string // porcelain snapshot taken at Reset
-	baselineContent string // content fingerprint of dirty paths at Reset
-	hasUntracked    bool
-	hasModified     bool
-	changedFiles    []string
-	statusChanged   bool
-	contentChanged  bool
-	commitChanged   bool
-	ignorePaths     map[string]bool // workspace-relative paths excluded from progress
+	workspaceDir  string
+	baseline      gitSnapshot
+	ignorePaths   map[string]bool
+	hasUntracked  bool
+	hasModified   bool
+	changedFiles  []string
+	statusChanged bool
+	commitChanged bool
 }
 
-// NewGitDetector 创建 Git 检测器
+type gitFileState struct {
+	status  string
+	content string
+}
+
+type gitSnapshot struct {
+	commit string
+	files  map[string]gitFileState
+}
+
 func NewGitDetector(workspaceDir string) (*GitDetector, error) {
 	abs, err := filepath.Abs(workspaceDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve workspace dir: %w", err)
+		return nil, fmt.Errorf("解析工作区路径失败: %w", err)
 	}
 	g := &GitDetector{workspaceDir: abs}
-
-	// 检查是否是 Git 仓库（必须是 workspace 自身为仓库根，不能是祖先仓库）
-	if !g.isGitRepo() {
-		// 初始化 Git 仓库
+	isRepo, err := g.isGitRepo()
+	if err != nil {
+		return nil, fmt.Errorf("检查 Git 仓库失败: %w", err)
+	}
+	if !isRepo {
 		if err := g.initRepo(); err != nil {
 			return nil, fmt.Errorf("初始化 Git 仓库失败: %w", err)
 		}
 	}
-
-	// 获取当前 commit 与初始状态快照
-	g.lastCommit = g.getCurrentCommit()
-	g.baselineStatus = g.getStatusPorcelain()
-	g.baselineContent = g.getContentFingerprint(g.baselineStatus)
-
+	if err := g.Reset(); err != nil {
+		return nil, fmt.Errorf("获取 Git 初始状态失败: %w", err)
+	}
 	return g, nil
 }
 
-func (g *GitDetector) Name() string {
-	return "git"
-}
+func (g *GitDetector) Name() string { return "git" }
 
-// IgnorePaths excludes workspace-relative operational files (e.g. the active
-// orchestrator log) from status/content fingerprints so they do not reset
-// consecutive_no_progress. Paths outside the workspace are ignored.
+// IgnorePaths excludes operational files such as the active runner log.
 func (g *GitDetector) IgnorePaths(paths ...string) {
 	if g.ignorePaths == nil {
 		g.ignorePaths = make(map[string]bool)
 	}
-	for _, p := range paths {
-		abs, err := filepath.Abs(p)
+	for _, path := range paths {
+		abs, err := filepath.Abs(path)
 		if err != nil {
 			continue
 		}
 		rel, err := filepath.Rel(g.workspaceDir, abs)
-		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			continue
 		}
 		g.ignorePaths[filepath.ToSlash(rel)] = true
+		for existing := range g.baseline.files {
+			if g.isIgnored(existing) {
+				delete(g.baseline.files, existing)
+			}
+		}
 	}
-	// Refresh baseline so ignored paths are dropped immediately.
-	g.baselineStatus = g.getStatusPorcelain()
-	g.baselineContent = g.getContentFingerprint(g.baselineStatus)
+}
+
+func (g *GitDetector) isIgnored(path string) bool {
+	for ignored := range g.ignorePaths {
+		if path == ignored || strings.HasPrefix(path, ignored+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *GitDetector) Detect() (bool, error) {
-	currentStatus := g.getStatusPorcelain()
-	currentCommit := g.getCurrentCommit()
-	currentContent := g.getContentFingerprint(currentStatus)
-
-	g.commitChanged = currentCommit != g.lastCommit && currentCommit != ""
-	g.statusChanged = currentStatus != g.baselineStatus
-	g.contentChanged = currentContent != g.baselineContent
-
-	g.hasUntracked = g.checkUntracked()
-	g.hasModified = g.checkModified()
-	g.changedFiles = g.diffStatusFiles(g.baselineStatus, currentStatus)
-	if g.contentChanged && !g.statusChanged {
-		// Porcelain unchanged but file contents edited — surface dirty paths.
-		for path := range porcelainFiles(currentStatus) {
+	current, err := g.snapshot()
+	if err != nil {
+		return false, fmt.Errorf("git 检测失败: %w", err)
+	}
+	g.commitChanged = current.commit != g.baseline.commit && current.commit != ""
+	g.statusChanged = false
+	g.hasUntracked = false
+	g.hasModified = false
+	g.changedFiles = g.changedFiles[:0]
+	for path, state := range current.files {
+		before, present := g.baseline.files[path]
+		if !present || before != state {
+			g.statusChanged = true
 			g.changedFiles = append(g.changedFiles, path)
+			if state.status == "??" {
+				g.hasUntracked = true
+			} else {
+				g.hasModified = true
+			}
 		}
 	}
-
-	hasProgress := g.statusChanged || g.contentChanged || g.commitChanged
-
-	if g.commitChanged {
-		g.lastCommit = currentCommit
+	for path := range g.baseline.files {
+		if _, present := current.files[path]; !present {
+			g.statusChanged = true
+			g.hasModified = true
+			g.changedFiles = append(g.changedFiles, path+" (removed)")
+		}
 	}
-
-	return hasProgress, nil
+	sort.Strings(g.changedFiles)
+	if g.commitChanged {
+		g.baseline.commit = current.commit
+	}
+	return g.statusChanged || g.commitChanged, nil
 }
 
 func (g *GitDetector) Reset() error {
-	g.lastCommit = g.getCurrentCommit()
-	g.baselineStatus = g.getStatusPorcelain()
-	g.baselineContent = g.getContentFingerprint(g.baselineStatus)
+	snapshot, err := g.snapshot()
+	if err != nil {
+		return fmt.Errorf("git 重置失败: %w", err)
+	}
+	g.baseline = snapshot
 	g.hasUntracked = false
 	g.hasModified = false
 	g.changedFiles = nil
 	g.statusChanged = false
-	g.contentChanged = false
 	g.commitChanged = false
 	return nil
 }
@@ -123,18 +145,20 @@ func (g *GitDetector) Details() string {
 	if g.commitChanged {
 		parts = append(parts, "新 commit")
 	}
-	if g.statusChanged || g.contentChanged {
-		if g.hasUntracked {
-			parts = append(parts, "新文件")
-		}
-		if g.hasModified || g.contentChanged {
-			parts = append(parts, "已修改")
-		}
+	if g.hasUntracked {
+		parts = append(parts, "新文件")
+	}
+	if g.hasModified {
+		parts = append(parts, "已修改")
 	}
 	if len(g.changedFiles) > 0 {
-		files := g.changedFiles
-		if len(files) > 5 {
-			files = append(files[:5], fmt.Sprintf("...等 %d 个文件", len(g.changedFiles)))
+		limit := len(g.changedFiles)
+		if limit > 5 {
+			limit = 5
+		}
+		files := append([]string(nil), g.changedFiles[:limit]...)
+		if len(g.changedFiles) > limit {
+			files = append(files, fmt.Sprintf("...等 %d 个文件", len(g.changedFiles)))
 		}
 		parts = append(parts, strings.Join(files, ", "))
 	}
@@ -144,369 +168,224 @@ func (g *GitDetector) Details() string {
 	return strings.Join(parts, "; ")
 }
 
-// isGitRepo 检查 workspace 自身是否为 Git 仓库根目录。
-// 祖先目录中的仓库不算，避免把外层项目的变更当成 worker 进展。
-func (g *GitDetector) isGitRepo() bool {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = g.workspaceDir
-	output, err := cmd.Output()
+func (g *GitDetector) snapshot() (gitSnapshot, error) {
+	commit, err := g.getCurrentCommit()
 	if err != nil {
-		return false
+		return gitSnapshot{}, err
 	}
-	toplevel, err := filepath.Abs(strings.TrimSpace(string(output)))
+	states, err := g.getStatusStates()
 	if err != nil {
-		return false
+		return gitSnapshot{}, err
 	}
-	// Compare evaluated paths so symlinks do not falsely reject a valid root.
-	topEval, err1 := filepath.EvalSymlinks(toplevel)
-	wsEval, err2 := filepath.EvalSymlinks(g.workspaceDir)
-	if err1 != nil || err2 != nil {
-		return filepath.Clean(toplevel) == filepath.Clean(g.workspaceDir)
+	files := make(map[string]gitFileState, len(states))
+	for path, status := range states {
+		if g.isIgnored(path) {
+			continue
+		}
+		content, err := g.hashWorkspaceFile(path)
+		if err != nil {
+			return gitSnapshot{}, fmt.Errorf("读取工作区文件 %q 失败: %w", path, err)
+		}
+		files[path] = gitFileState{status: status, content: content}
 	}
-	return filepath.Clean(topEval) == filepath.Clean(wsEval)
+	return gitSnapshot{commit: commit, files: files}, nil
 }
 
-// initRepo 初始化 Git 仓库
+// -z preserves spaces and non-ASCII paths; -uall lists files inside untracked dirs.
+func (g *GitDetector) getStatusStates() (map[string]string, error) {
+	out, _, err := g.gitOutputRaw("status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return nil, err
+	}
+	states := make(map[string]string)
+	for pos := 0; pos < len(out); {
+		end := strings.IndexByte(out[pos:], 0)
+		if end < 0 {
+			break
+		}
+		entry := out[pos : pos+end]
+		pos += end + 1
+		if len(entry) < 4 {
+			continue
+		}
+		status, path := entry[:2], entry[3:]
+		if status[0] == 'R' || status[0] == 'C' || status[1] == 'R' || status[1] == 'C' {
+			// In -z output the destination is first; skip the old path.
+			if next := strings.IndexByte(out[pos:], 0); next >= 0 {
+				pos += next + 1
+			}
+		}
+		states[path] = status
+	}
+	return states, nil
+}
+
+func (g *GitDetector) hashWorkspaceFile(path string) (string, error) {
+	full := filepath.Join(g.workspaceDir, filepath.FromSlash(path))
+	info, err := os.Lstat(full)
+	if errors.Is(err, os.ErrNotExist) {
+		return "missing", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(full)
+		if err != nil {
+			return "", err
+		}
+		return digestString("symlink:" + target), nil
+	}
+	if info.IsDir() {
+		h := sha256.New()
+		err := filepath.WalkDir(full, func(child string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(g.workspaceDir, child)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			if g.isIgnored(rel) {
+				return nil
+			}
+			sum, err := g.hashWorkspaceFile(rel)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "%s\x00%s\x00", rel, sum)
+			return nil
+		})
+		return hex.EncodeToString(h.Sum(nil)), err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Sprintf("special:%v:%d", info.Mode(), info.Size()), nil
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func digestString(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func (g *GitDetector) gitOutputRaw(args ...string) (stdout string, absent bool, outputErr error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = g.workspaceDir
+	output, err := cmd.Output()
+	if err == nil {
+		return string(output), false, nil
+	}
+	if isGitAbsence(err) {
+		return "", true, nil
+	}
+	return "", false, fmt.Errorf("git %s 失败: %w", strings.Join(args, " "), err)
+}
+
+func (g *GitDetector) gitOutput(args ...string) (string, bool, error) {
+	out, absent, err := g.gitOutputRaw(args...)
+	return strings.TrimSpace(out), absent, err
+}
+
+func isGitAbsence(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	msg := string(exitErr.Stderr)
+	return strings.Contains(msg, "not a git repository") || strings.Contains(msg, "unknown revision")
+}
+
+// isGitRepo checks this workspace rather than accepting an ancestor's repo.
+func (g *GitDetector) isGitRepo() (bool, error) {
+	top, absent, err := g.gitOutput("rev-parse", "--show-toplevel")
+	if err != nil || absent {
+		return false, err
+	}
+	top, err = filepath.Abs(top)
+	if err != nil {
+		return false, err
+	}
+	if resolved, err := filepath.EvalSymlinks(top); err == nil {
+		top = resolved
+	}
+	workspace := g.workspaceDir
+	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
+		workspace = resolved
+	}
+	return filepath.Clean(top) == filepath.Clean(workspace), nil
+}
+
 func (g *GitDetector) initRepo() error {
 	cmd := exec.Command("git", "init")
 	cmd.Dir = g.workspaceDir
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-
-	// 创建初始 commit
 	cmd = exec.Command("git", "add", "-A")
 	cmd.Dir = g.workspaceDir
-	cmd.Run()
-
+	_ = cmd.Run()
 	cmd = exec.Command("git", "commit", "-m", "Initial commit by orchestrator", "--allow-empty")
 	cmd.Dir = g.workspaceDir
-	cmd.Run()
-
+	_ = cmd.Run()
 	return nil
 }
 
-// getCurrentCommit 获取当前 commit hash
-func (g *GitDetector) getCurrentCommit() string {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	cmd.Dir = g.workspaceDir
-	output, err := cmd.Output()
+func (g *GitDetector) getCurrentCommit() (string, error) {
+	out, _, err := g.gitOutput("rev-parse", "HEAD")
+	return out, err
+}
+
+func (g *GitDetector) checkUntracked() (bool, error) {
+	out, _, err := g.gitOutput("ls-files", "--others", "--exclude-standard")
+	return len(out) > 0, err
+}
+
+func (g *GitDetector) checkModified() (bool, error) {
+	states, err := g.getStatusStates()
 	if err != nil {
-		return ""
+		return false, err
 	}
-	return strings.TrimSpace(string(output))
+	for _, status := range states {
+		if status != "??" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
-// getStatusPorcelain returns a stable git status --porcelain snapshot.
-// -z avoids C-style quoting so paths with spaces/non-ASCII fingerprint correctly.
-// --untracked-files=all enumerates files under untracked directories so edits
-// beneath an existing dirty directory change the fingerprint.
-func (g *GitDetector) getStatusPorcelain() string {
-	cmd := exec.Command("git", "status", "--porcelain", "-z", "--untracked-files=all")
-	cmd.Dir = g.workspaceDir
-	output, err := cmd.Output()
+func (g *GitDetector) getChangedFiles() ([]string, error) {
+	states, err := g.getStatusStates()
 	if err != nil {
-		return ""
+		return nil, err
 	}
-	return g.filterIgnoredStatus(normalizePorcelainZ(string(output)))
+	files := make([]string, 0, len(states))
+	for path := range states {
+		files = append(files, path)
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
-// normalizePorcelainZ converts NUL-terminated porcelain into newline records
-// with unquoted paths: "XY path\n" (renames keep the destination path only).
-func normalizePorcelainZ(raw string) string {
-	var b strings.Builder
-	i := 0
-	for i < len(raw) {
-		// Skip empty records produced by trailing NULs.
-		if raw[i] == 0 {
-			i++
-			continue
-		}
-		end := strings.IndexByte(raw[i:], 0)
-		if end < 0 {
-			break
-		}
-		entry := raw[i : i+end]
-		i += end + 1
-		if len(entry) < 3 {
-			continue
-		}
-		xy := entry[:2]
-		path := entry[3:] // after "XY "
-		// Rename/copy: PATH1\0PATH2\0 — consume the destination path next.
-		if len(xy) == 2 && (xy[0] == 'R' || xy[0] == 'C' || xy[1] == 'R' || xy[1] == 'C') {
-			if i < len(raw) {
-				end2 := strings.IndexByte(raw[i:], 0)
-				if end2 >= 0 {
-					path = raw[i : i+end2]
-					i += end2 + 1
-				}
-			}
-		}
-		if path == "" {
-			continue
-		}
-		b.WriteString(xy)
-		b.WriteByte(' ')
-		b.WriteString(path)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func (g *GitDetector) filterIgnoredStatus(status string) string {
-	if len(g.ignorePaths) == 0 {
-		return status
-	}
-	var b strings.Builder
-	for _, line := range strings.Split(status, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			continue
-		}
-		if len(line) < 4 {
-			b.WriteString(line)
-			b.WriteByte('\n')
-			continue
-		}
-		path := decodePorcelainPath(strings.TrimSpace(line[3:]))
-		if i := strings.Index(path, " -> "); i >= 0 {
-			path = path[i+4:]
-		}
-		if g.isIgnored(path) {
-			continue
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func (g *GitDetector) isIgnored(relPath string) bool {
-	if len(g.ignorePaths) == 0 {
-		return false
-	}
-	rel := filepath.ToSlash(relPath)
-	if g.ignorePaths[rel] {
-		return true
-	}
-	for ignored := range g.ignorePaths {
-		if strings.HasPrefix(rel, ignored+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-// getContentFingerprint hashes working-tree contents of every dirty path so
-// edits to already-dirty files count as progress even when porcelain is unchanged.
-func (g *GitDetector) getContentFingerprint(status string) string {
-	paths := make([]string, 0, len(porcelainFiles(status)))
-	for path := range porcelainFiles(status) {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	h := sha256.New()
-	for _, path := range paths {
-		sum := g.hashWorkspaceFile(path)
-		fmt.Fprintf(h, "%s\t%s\n", path, sum)
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func (g *GitDetector) hashWorkspaceFile(relPath string) string {
-	full := filepath.Join(g.workspaceDir, relPath)
-	info, err := os.Lstat(full)
-	if err != nil {
-		// Missing path (deleted) still contributes a stable sentinel.
-		return "missing:" + err.Error()
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(full)
-		if err != nil {
-			return "missing:" + err.Error()
-		}
-		sum := sha256.Sum256([]byte("symlink:" + target))
-		return hex.EncodeToString(sum[:])
-	}
-	if info.IsDir() {
-		return g.hashDirectory(full)
-	}
-	if !info.Mode().IsRegular() {
-		// Avoid blocking on FIFOs/devices; fingerprint metadata only.
-		return fmt.Sprintf("special:%v:%d", info.Mode(), info.Size())
-	}
-	data, err := os.ReadFile(full)
-	if err != nil {
-		return "missing:" + err.Error()
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
-// hashDirectory recursively fingerprints file contents under a dirty directory
-// entry (fallback when porcelain still reports a directory path).
-func (g *GitDetector) hashDirectory(dir string) string {
-	h := sha256.New()
-	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(g.workspaceDir, path)
-		if err != nil {
-			return nil
-		}
-		relSlash := filepath.ToSlash(rel)
-		if g.isIgnored(relSlash) {
-			return nil
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(path)
-			if err != nil {
-				fmt.Fprintf(h, "%s\tmissing:%s\n", relSlash, err.Error())
-				return nil
-			}
-			sum := sha256.Sum256([]byte("symlink:" + target))
-			fmt.Fprintf(h, "%s\t%s\n", relSlash, hex.EncodeToString(sum[:]))
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			fmt.Fprintf(h, "%s\tspecial:%v:%d\n", relSlash, info.Mode(), info.Size())
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			fmt.Fprintf(h, "%s\tmissing:%s\n", relSlash, err.Error())
-			return nil
-		}
-		sum := sha256.Sum256(data)
-		fmt.Fprintf(h, "%s\t%s\n", relSlash, hex.EncodeToString(sum[:]))
-		return nil
-	})
-	return "dir:" + hex.EncodeToString(h.Sum(nil))
-}
-
-// checkUntracked 检查是否有未追踪文件
-func (g *GitDetector) checkUntracked() bool {
-	cmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
-	cmd.Dir = g.workspaceDir
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return len(strings.TrimSpace(string(output))) > 0
-}
-
-// checkModified 检查是否有已修改文件
-func (g *GitDetector) checkModified() bool {
-	cmd := exec.Command("git", "status", "--porcelain")
-	cmd.Dir = g.workspaceDir
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			continue
-		}
-		// Untracked entries start with "??"; anything else is a tracked change.
-		if !strings.HasPrefix(line, "??") {
-			return true
-		}
-	}
-	return false
-}
-
-// diffStatusFiles returns file paths that differ between two porcelain snapshots.
-func (g *GitDetector) diffStatusFiles(before, after string) []string {
-	beforeSet := porcelainFiles(before)
-	afterSet := porcelainFiles(after)
-	var files []string
-	for f := range afterSet {
-		if !beforeSet[f] {
-			files = append(files, f)
-		}
-	}
-	for f := range beforeSet {
-		if !afterSet[f] {
-			files = append(files, f+" (removed)")
-		}
-	}
-	return files
-}
-
-func porcelainFiles(status string) map[string]bool {
-	out := make(map[string]bool)
-	for _, line := range strings.Split(status, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if len(line) < 4 {
-			continue
-		}
-		// Porcelain: XY␠path or XY␠orig -> path
-		path := decodePorcelainPath(strings.TrimSpace(line[3:]))
-		if i := strings.Index(path, " -> "); i >= 0 {
-			path = path[i+4:]
-		}
-		if path != "" {
-			out[path] = true
-		}
-	}
-	return out
-}
-
-// decodePorcelainPath unquotes C-style quoted porcelain paths (spaces / non-ASCII)
-// when status was captured without -z. Paths from -z are returned unchanged.
-func decodePorcelainPath(path string) string {
-	if len(path) < 2 || path[0] != '"' || path[len(path)-1] != '"' {
-		return path
-	}
-	var b strings.Builder
-	b.Grow(len(path) - 2)
-	s := path[1 : len(path)-1]
-	for i := 0; i < len(s); i++ {
-		if s[i] != '\\' || i+1 >= len(s) {
-			b.WriteByte(s[i])
-			continue
-		}
-		i++
-		switch s[i] {
-		case 'n':
-			b.WriteByte('\n')
-		case 't':
-			b.WriteByte('\t')
-		case '"', '\\':
-			b.WriteByte(s[i])
-		default:
-			// Octal escape \NNN
-			if s[i] >= '0' && s[i] <= '7' && i+2 < len(s) &&
-				s[i+1] >= '0' && s[i+1] <= '7' && s[i+2] >= '0' && s[i+2] <= '7' {
-				v := (int(s[i]-'0') << 6) | (int(s[i+1]-'0') << 3) | int(s[i+2]-'0')
-				b.WriteByte(byte(v))
-				i += 2
-			} else {
-				b.WriteByte('\\')
-				b.WriteByte(s[i])
-			}
-		}
-	}
-	return b.String()
-}
-
-// CreateCheckpoint 创建检查点（自动 commit）
 func (g *GitDetector) CreateCheckpoint(message string) error {
-	// Stage all changes
 	cmd := exec.Command("git", "add", "-A")
 	cmd.Dir = g.workspaceDir
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-
-	// Commit
 	cmd = exec.Command("git", "commit", "-m", message, "--allow-empty")
 	cmd.Dir = g.workspaceDir
 	return cmd.Run()

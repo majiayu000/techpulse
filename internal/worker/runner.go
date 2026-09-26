@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/memory"
+	"github.com/majiayu000/techpulse/internal/memory"
 )
 
 // Result Worker 运行结果

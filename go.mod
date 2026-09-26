@@ -1,4 +1,4 @@
-module github.com/anthropic/autonomous-runner
+module github.com/majiayu000/techpulse
 
 go 1.22
 

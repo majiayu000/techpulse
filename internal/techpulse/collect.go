@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
-	"github.com/anthropic/autonomous-runner/internal/logger"
-	"github.com/anthropic/autonomous-runner/internal/progress"
+	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/logger"
+	"github.com/majiayu000/techpulse/internal/progress"
 )
 
 // collectFromSources collects from specific sources or all if none specified.

@@ -5,19 +5,19 @@ import "time"
 
 // Post represents a Reddit post.
 type Post struct {
-	ID        string  `json:"id"`
-	Title     string  `json:"title"`
-	URL       string  `json:"url"`
-	Permalink string  `json:"permalink"`
-	Author    string  `json:"author"`
-	Selftext  string  `json:"selftext"`
-	Score     int     `json:"score"`
-	NumComments int   `json:"num_comments"`
-	Created   float64 `json:"created_utc"`
-	Subreddit string  `json:"subreddit"`
-	Flair     string  `json:"link_flair_text"`
-	Domain    string  `json:"domain"`
-	IsSelf    bool    `json:"is_self"`
+	ID          string  `json:"id"`
+	Title       string  `json:"title"`
+	URL         string  `json:"url"`
+	Permalink   string  `json:"permalink"`
+	Author      string  `json:"author"`
+	Selftext    string  `json:"selftext"`
+	Score       int     `json:"score"`
+	NumComments int     `json:"num_comments"`
+	Created     float64 `json:"created_utc"`
+	Subreddit   string  `json:"subreddit"`
+	Flair       string  `json:"link_flair_text"`
+	Domain      string  `json:"domain"`
+	IsSelf      bool    `json:"is_self"`
 }
 
 // CreatedTime returns the post creation time.
@@ -55,9 +55,9 @@ var DefaultSubreddits = []Subreddit{
 type SortType string
 
 const (
-	SortHot  SortType = "hot"
-	SortNew  SortType = "new"
-	SortTop  SortType = "top"
+	SortHot SortType = "hot"
+	SortNew SortType = "new"
+	SortTop SortType = "top"
 )
 
 // ValidSortTypes contains all valid sort types.

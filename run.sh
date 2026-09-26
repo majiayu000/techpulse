@@ -44,8 +44,10 @@ if [ "$#" -ge 4 ]; then
     fi
 fi
 
-# 编译（如果需要）
-if [ ! -f "./orchestrator" ] || [ "./cmd/orchestrator/main.go" -nt "./orchestrator" ]; then
+# 编译（源码或模块图比二进制新时）
+if [ ! -f "./orchestrator" ] || \
+   [ -n "$(find cmd/orchestrator internal/config internal/memory internal/progress internal/worker -name '*.go' -newer ./orchestrator -print -quit 2>/dev/null)" ] || \
+   [ go.mod -nt ./orchestrator ] || [ go.sum -nt ./orchestrator ]; then
     echo "编译中..."
     go build -o orchestrator ./cmd/orchestrator/ || exit 1
 fi

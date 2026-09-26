@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
 )
 
 func TestCollector_Name(t *testing.T) {

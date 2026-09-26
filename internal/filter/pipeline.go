@@ -1,7 +1,7 @@
 package filter
 
 import (
-	"github.com/anthropic/autonomous-runner/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector"
 )
 
 // Pipeline chains multiple filters together.

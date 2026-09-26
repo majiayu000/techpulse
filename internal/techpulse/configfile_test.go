@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anthropic/autonomous-runner/internal/collector/rss"
+	"github.com/majiayu000/techpulse/internal/collector/rss"
 )
 
 func TestLoadConfigFile(t *testing.T) {
@@ -81,10 +81,12 @@ func TestFindConfigFile(t *testing.T) {
 func TestMergeWithConfig(t *testing.T) {
 	base := DefaultConfig()
 	enableSummary := true
+	retention := 0
 	file := &FileConfig{
 		Limit:         100,
 		Output:        "/custom",
 		Timeout:       180,
+		RetentionDays: &retention,
 		EnableSummary: &enableSummary,
 		Keywords:      KeywordsConfig{Include: []string{"custom"}},
 	}
@@ -96,6 +98,9 @@ func TestMergeWithConfig(t *testing.T) {
 	}
 	if result.Output != "/custom" {
 		t.Errorf("Merged Output = %s, want /custom", result.Output)
+	}
+	if result.RetentionDays != 0 {
+		t.Errorf("Merged RetentionDays = %d, want 0", result.RetentionDays)
 	}
 	if result.Keywords == nil || len(result.Keywords.Include) != 1 {
 		t.Error("Keywords not merged correctly")

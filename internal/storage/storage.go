@@ -4,7 +4,7 @@ package storage
 import (
 	"time"
 
-	"github.com/anthropic/autonomous-runner/internal/summarizer"
+	"github.com/majiayu000/techpulse/internal/summarizer"
 )
 
 // Storage defines the interface for article persistence.
@@ -33,6 +33,6 @@ func DefaultConfig() Config {
 		BaseDir:       ".techpulse",
 		DigestFile:    "DIGEST.md",
 		ArchiveDir:    "archive",
-		RetentionDays: 30,
+		RetentionDays: 0,
 	}
 }
