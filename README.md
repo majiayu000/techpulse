@@ -260,7 +260,7 @@ and `go tool cover -func=/tmp/techpulse-coverage.out`:
 | httpclient | 80.7% |
 | progress | 80.4% |
 | memory | 75.9% |
-| cmd/techpulse | 73.7% |
+| cmd/techpulse | 74.5% |
 | collector (registry) | 67.2% |
 | config | 36.8% |
 | worker | 17.7% |

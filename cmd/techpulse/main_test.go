@@ -188,8 +188,26 @@ func TestParseFlagsValidateIsHonest(t *testing.T) {
 			wantErrContains: "validation failed",
 		},
 		{
+			name:            "negative file limit fails",
+			configYAML:      "limit: -1\n",
+			args:            []string{"--validate"},
+			wantErrContains: "limit",
+		},
+		{
+			name:            "negative file timeout fails",
+			configYAML:      "timeout: -5\n",
+			args:            []string{"--validate"},
+			wantErrContains: "timeout",
+		},
+		{
 			name:            "CLI override validates effective limit",
 			configYAML:      "limit: 9999\n",
+			args:            []string{"--limit", "10", "--validate"},
+			wantErrContains: "",
+		},
+		{
+			name:            "CLI override permits negative file limit",
+			configYAML:      "limit: -1\n",
 			args:            []string{"--limit", "10", "--validate"},
 			wantErrContains: "",
 		},
@@ -290,6 +308,12 @@ func TestParseFlagsRejections(t *testing.T) {
 			wantErrContains: "rss_feeds[0].url",
 		},
 		{
+			name:            "negative file limit rejected during normal startup",
+			configYAML:      "limit: -1\n",
+			args:            []string{},
+			wantErrContains: "limit",
+		},
+		{
 			name:            "undefined flag rejected",
 			args:            []string{"--bogus-flag"},
 			wantErrContains: "not defined",
@@ -367,6 +391,14 @@ func TestCreateConfigProviderKeepsLastGoodOnFailure(t *testing.T) {
 	}
 	if got := provider(); got.Limit != 40 {
 		t.Errorf("after invalid file, Limit = %d, want last-good 40", got.Limit)
+	}
+
+	// A negative file value is ignored by MergeWithConfig, but is still invalid.
+	if err := os.WriteFile(path, []byte("limit: -1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider(); got.Limit != 40 {
+		t.Errorf("after negative file limit, Limit = %d, want last-good 40", got.Limit)
 	}
 
 	// A malformed RSS feed is file-only; it cannot be fixed by a CLI flag.

@@ -166,8 +166,8 @@ func printCollectionDone(next time.Time) {
 // validation, is logged at error level and the last known good configuration
 // is kept. Validation runs after CLI overrides — matching startup — so a file
 // value that is invalid on its own but overridden by a valid CLI flag (e.g.
-// limit: 999 with --limit 10) still reloads successfully. RSS feed entries,
-// which have no CLI override, are validated separately.
+// limit: 999 with --limit 10) still reloads successfully. File-only fields
+// and file values without a CLI override are validated separately.
 func createConfigProvider(baseCfg techpulse.Config) func() techpulse.Config {
 	path := configPath
 	if path == "" {
@@ -190,7 +190,7 @@ func createConfigProvider(baseCfg techpulse.Config) func() techpulse.Config {
 				logger.F("path", path), logger.F("errors", errs.Error()))
 			return lastGood
 		}
-		if errs := validateRSSFeedConfig(fileCfg); len(errs) > 0 {
+		if errs := validateFileConfigWithOverrides(fileCfg); len(errs) > 0 {
 			log.Error("Reloaded config failed validation, keeping last good config",
 				logger.F("path", path), logger.F("errors", errs.Error()))
 			return lastGood
@@ -291,7 +291,7 @@ func parseFlags(args []string) (*techpulse.Config, error) {
 	if errs := techpulse.ValidateConfig(cfg); len(errs) > 0 {
 		return nil, validationError(errs)
 	}
-	if errs := validateRSSFeedConfig(fileCfg); len(errs) > 0 {
+	if errs := validateFileConfigWithOverrides(fileCfg); len(errs) > 0 {
 		return nil, validationError(errs)
 	}
 
@@ -303,13 +303,26 @@ func parseFlags(args []string) (*techpulse.Config, error) {
 	return &cfg, nil
 }
 
-// RSS feeds have no CLI override, so their file values must be valid even
-// when an invalid limit or timeout in the same file is overridden by a flag.
-func validateRSSFeedConfig(fileCfg *techpulse.FileConfig) techpulse.ValidationErrors {
+// Validate values that MergeWithConfig does not carry into the effective
+// config, while allowing explicitly overridden file values.
+func validateFileConfigWithOverrides(fileCfg *techpulse.FileConfig) techpulse.ValidationErrors {
 	if fileCfg == nil {
 		return nil
 	}
-	return techpulse.ValidateFileConfig(&techpulse.FileConfig{RSSFeeds: fileCfg.RSSFeeds})
+	check := *fileCfg
+	if cliOpts.set["limit"] {
+		check.Limit = 0
+	}
+	if cliOpts.set["timeout"] {
+		check.Timeout = 0
+	}
+	if cliOpts.set["retention-days"] {
+		check.RetentionDays = nil
+	}
+	if cliOpts.set["sources"] {
+		check.Sources = nil
+	}
+	return techpulse.ValidateFileConfig(&check)
 }
 
 // loadFileConfig loads the YAML config given via --config or auto-detected,
