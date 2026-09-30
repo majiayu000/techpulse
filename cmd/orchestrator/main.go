@@ -62,8 +62,9 @@ func run() int {
 		case "max-duration":
 			duration_ns := *maxDurationHours * float64(time.Hour)
 			// float64(MaxInt64) rounds up to 2^63, outside time.Duration's range.
+			// The overflowing negative hours boundary rounds to MinInt64.
 			if math.IsNaN(*maxDurationHours) || math.IsInf(*maxDurationHours, 0) ||
-				duration_ns >= float64(math.MaxInt64) || duration_ns < float64(math.MinInt64) {
+				duration_ns >= float64(math.MaxInt64) || duration_ns <= float64(math.MinInt64) {
 				invalid_duration = true
 				return
 			}
