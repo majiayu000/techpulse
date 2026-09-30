@@ -48,6 +48,7 @@ func run() int {
 	// Only apply CLI overrides for flags that were explicitly supplied so
 	// config.yaml limits are preserved when the binary is invoked bare.
 	var invalidCost bool
+	var invalid_duration bool
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "max-iterations":
@@ -59,15 +60,26 @@ func run() int {
 			}
 			cfg.MaxCostUSD = *maxCost
 		case "max-duration":
+			duration_ns := *maxDurationHours * float64(time.Hour)
+			// float64(MaxInt64) rounds up to 2^63, outside time.Duration's range.
+			if math.IsNaN(*maxDurationHours) || math.IsInf(*maxDurationHours, 0) ||
+				duration_ns >= float64(math.MaxInt64) || duration_ns < float64(math.MinInt64) {
+				invalid_duration = true
+				return
+			}
 			if *maxDurationHours <= 0 {
 				cfg.MaxDuration = 0
 			} else {
-				cfg.MaxDuration = time.Duration(*maxDurationHours * float64(time.Hour))
+				cfg.MaxDuration = time.Duration(duration_ns)
 			}
 		}
 	})
 	if invalidCost {
 		fmt.Fprintf(os.Stderr, "invalid --max-cost: must be a finite number\n")
+		return 1
+	}
+	if invalid_duration {
+		fmt.Fprintf(os.Stderr, "invalid --max-duration: must be finite and within the time.Duration range\n")
 		return 1
 	}
 	if err := cfg.Validate(); err != nil {
