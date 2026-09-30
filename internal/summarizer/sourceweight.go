@@ -54,13 +54,13 @@ func DefaultSourceWeights() []SourceWeight {
 
 		// High-quality tech news (1.3x weight)
 		{Name: "techcrunch", Weight: 1.3},
-		{Name: "arstechnica", Weight: 1.3},
-		{Name: "theverge", Weight: 1.2},
+		{Name: "ars technica", Weight: 1.3},
+		{Name: "the verge", Weight: 1.2},
 		{Name: "wired", Weight: 1.3},
 		{Name: "mit technology review", Weight: 1.4},
 
 		// GitHub (repos are usually high quality)
-		{Name: "github_trending", Weight: 1.4},
+		{Name: "github", Weight: 1.4},
 
 		// Reddit (varies by subreddit, average quality)
 		{Name: "reddit", Weight: 1.0},
