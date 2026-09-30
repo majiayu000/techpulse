@@ -80,7 +80,7 @@ func (c *Config) Validate() error {
 		c.MaxCostUSD = 0
 	}
 	if c.WorkerTimeout < time.Minute {
-		c.WorkerTimeout = 30 * time.Minute
+		return fmt.Errorf("worker_timeout must be at least 1m")
 	}
 	return nil
 }
