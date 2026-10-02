@@ -1,6 +1,8 @@
 # TechPulse
 
-A CLI tool that automatically collects and curates AI/tech news from multiple sources.
+TechPulse is the Go command-line news collector in [majiayu000/techpulse](https://github.com/majiayu000/techpulse). It collects Hacker News, RSS, and other tech sources, filters them by keyword, and writes a local Markdown digest.
+
+For a complete configuration-to-report example, see [Build a Hacker News and RSS daily digest](docs/daily-digest.md).
 
 ## Features
 
@@ -290,4 +292,8 @@ make help             # Show all commands
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
+
+## Support
+
+Report bugs in [GitHub issues](https://github.com/majiayu000/techpulse/issues). Include your build commit, `./techpulse --version`, source IDs, command, and relevant errors. Remove private feed URLs and credentials before sharing configuration.
