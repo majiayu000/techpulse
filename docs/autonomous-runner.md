@@ -95,7 +95,7 @@ stop_when_empty: true       # 任务为空时停止
 
 # 执行配置
 cooldown_duration: 10s       # 迭代间隔
-worker_timeout: 30m          # 单次 worker 超时
+worker_timeout: 30m          # 单次 worker 超时（至少 1m，否则启动报错）
 
 # 进展检测
 use_git_detection: true      # 基于 workspace 的 Git 变化检测
