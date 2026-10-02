@@ -9,7 +9,7 @@ func TestDefaultSourceWeights(t *testing.T) {
 	}
 
 	// Check that known sources exist
-	knownSources := []string{"hackernews", "lobsters", "github_trending", "reddit", "rss"}
+	knownSources := []string{"hackernews", "lobsters", "github", "reddit", "rss"}
 	weightMap := make(map[string]float64)
 	for _, w := range weights {
 		weightMap[w.Name] = w.Weight
@@ -43,7 +43,7 @@ func TestSourceWeightsGetWeight(t *testing.T) {
 		{"hackernews", 1.5},       // Exact match
 		{"HACKERNEWS", 1.5},       // Case insensitive
 		{"lobsters_hottest", 1.5}, // Prefix match
-		{"github_trending_daily", 1.4},
+		{"github", 1.4},
 		{"reddit", 1.0},
 		{"unknown_source", 1.0}, // Default neutral
 	}
@@ -81,11 +81,11 @@ func TestSourceWeightsCalculateBonus(t *testing.T) {
 		source   string
 		expected float64
 	}{
-		{"hackernews", 1.0},      // weight 1.5 -> bonus +1.0
-		{"lobsters", 1.0},        // weight 1.5 -> bonus +1.0
-		{"github_trending", 0.8}, // weight 1.4 -> bonus +0.8
-		{"reddit", 0.0},          // weight 1.0 -> bonus 0.0
-		{"unknown", 0.0},         // default weight 1.0 -> bonus 0.0
+		{"hackernews", 1.0}, // weight 1.5 -> bonus +1.0
+		{"lobsters", 1.0},   // weight 1.5 -> bonus +1.0
+		{"github", 0.8},     // weight 1.4 -> bonus +0.8
+		{"reddit", 0.0},     // weight 1.0 -> bonus 0.0
+		{"unknown", 0.0},    // default weight 1.0 -> bonus 0.0
 	}
 
 	const epsilon = 0.001

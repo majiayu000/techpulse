@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/majiayu000/techpulse/internal/filter"
@@ -72,7 +73,13 @@ func (s *BasicSummarizer) calculateImportance(a filter.FilteredArticle) float64 
 	score += float64(len(a.MatchedKeywords)) * 0.5
 
 	// Bonus for source weight (trusted sources get higher scores)
-	score += s.sourceWeights.CalculateBonus(a.Source)
+	source := a.Source
+	if source == "rss" {
+		if feedName := strings.TrimSpace(a.Metadata["feed_name"]); feedName != "" {
+			source = feedName
+		}
+	}
+	score += s.sourceWeights.CalculateBonus(source)
 
 	// Cap at 10, floor at 1
 	if score > 10 {

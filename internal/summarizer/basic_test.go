@@ -2,12 +2,90 @@ package summarizer
 
 import (
 	"context"
+	"fmt"
+	"math"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	"github.com/majiayu000/techpulse/internal/collector"
+	"github.com/majiayu000/techpulse/internal/collector/github"
+	"github.com/majiayu000/techpulse/internal/collector/rss"
 	"github.com/majiayu000/techpulse/internal/filter"
+	"github.com/majiayu000/techpulse/internal/httpclient"
 )
+
+func TestEnrich_CollectorSourceWeights(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/trending" {
+			fmt.Fprint(w, `<article class="Box-row"><h2><a href="/example/project">example/project</a></h2></article>`)
+			return
+		}
+		fmt.Fprintf(w, `<rss><channel><item><title>%s</title><link>https://example.com%s</link></item></channel></rss>`, r.URL.Path, r.URL.Path)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	articles, err := github.NewWithBaseURL(server.URL).Collect(ctx, collector.Options{})
+	if err != nil || len(articles) != 1 {
+		t.Fatalf("GitHub Collect() = %d articles, %v; want one article", len(articles), err)
+	}
+	if articles[0].Source != "github" {
+		t.Fatalf("GitHub article source = %q, want github", articles[0].Source)
+	}
+	wantImportance := map[string]float64{articles[0].Title: 5.8}
+	feedNames := []string{
+		rss.DefaultSources[0].Name,
+		rss.DefaultSources[1].Name,
+		rss.DefaultSources[2].Name,
+		rss.DefaultSources[3].Name,
+		rss.DefaultSources[4].Name,
+		"  aRs TeChNiCa  ",
+		"Unknown Publication",
+		"",
+	}
+	feedImportance := []float64{5.6, 5.6, 5.4, 5.6, 5.8, 5.6, 5.0, 5.0}
+	sources := make([]rss.Source, len(feedNames))
+	for i, name := range feedNames {
+		path := fmt.Sprintf("/feed/%d", i)
+		sources[i] = rss.Source{Name: name, URL: server.URL + path}
+		wantImportance[path] = feedImportance[i]
+	}
+	feedArticles, err := rss.New(sources, httpclient.WithAllowPrivateHosts(true)).Collect(ctx, collector.Options{})
+	if err != nil || len(feedArticles) != len(sources) {
+		t.Fatalf("RSS Collect() = %d articles, %v; want %d", len(feedArticles), err, len(sources))
+	}
+	for i, a := range feedArticles {
+		if a.Source != "rss" || a.Metadata["feed_name"] != feedNames[i] {
+			t.Fatalf("RSS article %d source/metadata = %q/%v", i, a.Source, a.Metadata)
+		}
+	}
+	articles = append(articles, feedArticles...)
+	articles = append(articles, collector.Article{Title: "RSS without metadata", Source: "rss"})
+	wantImportance["RSS without metadata"] = 5.0
+
+	s := NewBasicSummarizer()
+	enriched, err := s.Enrich(ctx, filter.ToFiltered(articles))
+	if err != nil || len(enriched) != len(articles) {
+		t.Fatalf("Enrich() = %d articles, %v; want %d", len(enriched), err, len(articles))
+	}
+	for _, a := range enriched {
+		if want := wantImportance[a.Title]; math.Abs(a.Importance-want) > 0.0001 {
+			t.Errorf("%q (%s, %v) importance = %v, want %v", a.Title, a.Source, a.Metadata, a.Importance, want)
+		}
+	}
+	if enriched[0].Source != "github" || enriched[1].Metadata["feed_name"] != "MIT Technology Review" {
+		t.Errorf("highest-weight stories = %q, %q; want GitHub then MIT Technology Review", enriched[0].Title, enriched[1].Title)
+	}
+	report, err := s.GenerateReport(ctx, enriched)
+	if err != nil {
+		t.Fatalf("GenerateReport() error = %v", err)
+	}
+	if report.TopStories[0].Source != "github" || report.Stats.BySource["rss"] != len(feedArticles)+1 {
+		t.Errorf("report does not retain weighted order and RSS source grouping: %+v", report)
+	}
+}
 
 func TestNewBasicSummarizer(t *testing.T) {
 	s := NewBasicSummarizer()
